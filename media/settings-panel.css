@@ -1,0 +1,181 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--vscode-font-family);
+  font-size:   var(--vscode-font-size);
+  color:       var(--vscode-foreground);
+  background:  var(--vscode-editor-background);
+  padding: 28px 32px;
+  max-width: 560px;
+}
+
+h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 24px;
+  color: var(--vscode-foreground);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section {
+  margin-bottom: 20px;
+}
+
+label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 5px;
+}
+
+.field-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+input[type="text"] {
+  flex: 1;
+  padding: 6px 9px;
+  border: 1px solid var(--vscode-input-border);
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  border-radius: 4px;
+  outline: none;
+  min-width: 0;
+}
+
+input[type="text"]:focus {
+  border-color: var(--vscode-focusBorder);
+}
+
+input[type="text"]::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+}
+
+.hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* ── Buttons ─────────────────────────────────────── */
+
+button {
+  padding: 5px 12px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 4px;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+button.primary {
+  background: var(--vscode-button-background);
+  color:      var(--vscode-button-foreground);
+}
+button.primary:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+button.secondary {
+  background: var(--vscode-button-secondaryBackground);
+  color:      var(--vscode-button-secondaryForeground);
+}
+button.secondary:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+/* ── Provider toggle ─────────────────────────────── */
+
+.provider-toggle {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.radio-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  cursor: pointer;
+  flex: 1;
+  transition: border-color 0.15s;
+}
+
+.radio-label:has(input:checked) {
+  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-list-activeSelectionBackground, rgba(255,255,255,0.05));
+}
+
+.radio-label input[type="radio"] {
+  margin-top: 3px;
+  flex-shrink: 0;
+  accent-color: var(--vscode-focusBorder);
+}
+
+.radio-box {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.3;
+}
+
+.radio-box strong {
+  font-size: 13px;
+}
+
+.radio-box small {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.optional {
+  font-weight: 400;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ── Divider ─────────────────────────────────────── */
+
+hr {
+  border: none;
+  border-top: 1px solid var(--vscode-panel-border);
+  margin: 24px 0;
+}
+
+/* ── Status bar ──────────────────────────────────── */
+
+.status {
+  margin-top: 16px;
+  min-height: 20px;
+  font-size: 12px;
+  border-radius: 4px;
+  padding: 0 6px;
+  line-height: 20px;
+}
+.status.ok      { color: var(--vscode-terminal-ansiGreen); }
+.status.error   { color: var(--vscode-errorForeground); }
+.status.pending { color: var(--vscode-descriptionForeground); font-style: italic; }
+
+/* ── Footer action row ───────────────────────────── */
+
+.actions {
+  margin-top: 24px;
+  display: flex;
+  gap: 8px;
+}

@@ -1,0 +1,91 @@
+{
+  "name": "docs-agent",
+  "displayName": "Docs Agent",
+  "description": "Anti-hallucination documentation generator powered by local Ollama",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "docsAgent.documentFile",
+        "title": "Docs Agent: Document this file"
+      },
+      {
+        "command": "docsAgent.analyzeImpact",
+        "title": "Docs Agent: Analyze impact"
+      },
+      {
+        "command": "docsAgent.showGraph",
+        "title": "Docs Agent: Show code graph"
+      },
+      {
+        "command": "docsAgent.openSettings",
+        "title": "Docs Agent: Settings"
+      },
+      {
+        "command": "docsAgent.documentProject",
+        "title": "Docs Agent: Generate project documentation suite"
+      }
+    ],
+    "configuration": {
+      "title": "Docs Agent",
+      "properties": {
+        "docsAgent.provider": {
+          "type": "string",
+          "enum": ["ollama", "vscode-lm"],
+          "enumDescriptions": [
+            "Use a local Ollama instance",
+            "Use the language model selected in VS Code / GitHub Copilot"
+          ],
+          "default": "ollama",
+          "description": "LLM provider for documentation generation"
+        },
+        "docsAgent.ollamaUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Base URL of the local Ollama instance (used when provider is 'ollama')"
+        },
+        "docsAgent.model": {
+          "type": "string",
+          "default": "qwen3:35b",
+          "description": "Ollama model name (used when provider is 'ollama')"
+        },
+        "docsAgent.vscodeLmFamily": {
+          "type": "string",
+          "default": "",
+          "description": "VS Code LM model family, e.g. 'gpt-4o' or 'claude-3.5-sonnet'. Leave empty to use the first available model (used when provider is 'vscode-lm')"
+        },
+        "docsAgent.docsFolder": {
+          "type": "string",
+          "default": "docs",
+          "description": "Folder (relative to workspace root) where generated .md files are written"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build:ext": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
+    "build:webview": "esbuild src/webview/graph-panel.ts --bundle --outfile=media/graph-panel.js --format=iife --platform=browser --minify",
+    "build:settings": "esbuild src/webview/settings-panel.ts --bundle --outfile=media/settings-panel.js --format=iife --platform=browser --minify",
+    "build": "pnpm run build:ext && pnpm run build:webview && pnpm run build:settings",
+    "watch:ext": "pnpm run build:ext -- --watch",
+    "watch:webview": "pnpm run build:webview -- --watch",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/three": "^0.184.1",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "esbuild": "^0.20.0",
+    "three": "^0.184.0",
+    "typescript": "^5.3.0"
+  }
+}
