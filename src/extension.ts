@@ -17,8 +17,9 @@ const PRIMERS_DIR = path.join(__dirname, '..', 'src', 'primers');
 let codeGraph: CodeGraph | null = null;
 
 function loadPrimer(filePath: string): string {
-  if (filePath.endsWith('.java')) return loadPrimerFile('springboot.md');
-  if (filePath.endsWith('.cs')) return loadPrimerFile('webforms.md');
+  if (filePath.endsWith('.java'))                                          return loadPrimerFile('springboot.md');
+  if (filePath.endsWith('.cs'))                                            return loadPrimerFile('webforms.md');
+  if (filePath.endsWith('.ts') && !filePath.endsWith('.spec.ts'))          return loadPrimerFile('angular.md');
   return '';
 }
 
