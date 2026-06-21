@@ -1,5 +1,8 @@
-src/
+src/**
+!src/primers/**
 node_modules/**
-!node_modules/better-sqlite3/**
 tsconfig.json
 .gitignore
+.claude/
+pnpm-lock.yaml
+pnpm-workspace.yaml

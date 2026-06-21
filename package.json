@@ -1,8 +1,9 @@
 {
   "name": "docs-agent",
+  "publisher": "felipepepe",
   "displayName": "Docs Agent",
   "description": "Anti-hallucination documentation generator powered by local Ollama",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -71,19 +72,20 @@
     }
   },
   "dependencies": {
-    "better-sqlite3": "^9.6.0"
+    "better-sqlite3": "^12.11.1"
   },
   "scripts": {
     "build:ext": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:better-sqlite3 --format=cjs --platform=node",
     "build:webview": "esbuild src/webview/graph-panel.ts --bundle --outfile=media/graph-panel.js --format=iife --platform=browser --minify",
     "build:settings": "esbuild src/webview/settings-panel.ts --bundle --outfile=media/settings-panel.js --format=iife --platform=browser --minify",
     "build": "pnpm run build:ext && pnpm run build:webview && pnpm run build:settings",
+    "copy-native": "node scripts/copy-native.js",
     "watch:ext": "pnpm run build:ext -- --watch",
     "watch:webview": "pnpm run build:webview -- --watch",
-    "package": "vsce package"
+    "package": "pnpm run build && pnpm run copy-native && vsce package --no-dependencies --allow-missing-repository"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.0",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.0.0",
     "@types/three": "^0.184.1",
     "@types/vscode": "^1.85.0",
