@@ -36,6 +36,8 @@ const searchEl    = document.getElementById('search')    as HTMLInputElement;
 const resultsEl   = document.getElementById('results')!;
 const detailEl    = document.getElementById('detail')!;
 const statsEl     = document.getElementById('stats')!;
+const btnZoomIn   = document.getElementById('btn-zoom-in')  as HTMLButtonElement;
+const btnZoomOut  = document.getElementById('btn-zoom-out') as HTMLButtonElement;
 const btnOverview = document.getElementById('btn-overview') as HTMLButtonElement;
 const btnClear    = document.getElementById('btn-clear')    as HTMLButtonElement;
 const btnReload   = document.getElementById('btn-reload')   as HTMLButtonElement;
@@ -380,6 +382,9 @@ function handlePick(e: MouseEvent): void {
     setSelected(node);
     if (!node.id.startsWith('table:')) {
       vscode.postMessage({ type: 'expand', nodeId: node.id });
+      if (node.file) {
+        vscode.postMessage({ type: 'openFile', file: node.file, line: node.line });
+      }
     }
   } else {
     setSelected(null);
@@ -584,6 +589,16 @@ function showDetail(node: SimNode | null): void {
 }
 
 // ── Toolbar buttons ───────────────────────────────────────────────────────────
+btnZoomIn.addEventListener('click', () => {
+  sph.radius = Math.max(80, sph.radius * 0.7);
+  syncCamera();
+});
+
+btnZoomOut.addEventListener('click', () => {
+  sph.radius = Math.min(5000, sph.radius * 1.43);
+  syncCamera();
+});
+
 btnOverview.addEventListener('click', () => {
   vscode.postMessage({ type: 'overview' });
 });

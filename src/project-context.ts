@@ -36,6 +36,7 @@ function detectType(root: string, manifest: string): string {
   }
   if (fs.existsSync(path.join(root, 'package.json'))) {
     const pkg = safeRead(path.join(root, 'package.json'));
+    if (pkg.includes('"@angular/core"'))                                              return 'angular';
     if (pkg.includes('"express"') || pkg.includes('"fastify"') || pkg.includes('"koa"')) return 'node-api';
     if (pkg.includes('"react"') || pkg.includes('"next"') || pkg.includes('"vue"')) return 'node-frontend';
     return 'node';
@@ -128,15 +129,16 @@ function scoreFile(filePath: string): number {
 
   // Deprioritize test and generated files
   if (/test|spec|mock|fixture|migration|generated|g\.cs/.test(name)) return -1;
+  if (name.endsWith('.d.ts') || name.endsWith('.stories.ts'))         return -1;
 
-  // High-value patterns
-  if (/controller|page|handler|endpoint|router|route/.test(noExt))  return 10;
-  if (/service|business|bll|usecase|interactor/.test(noExt))        return 8;
-  if (/interface|iservice|irepository|contract/.test(noExt))        return 7;
-  if (/repository|dal|dataaccess|store/.test(noExt))                return 6;
-  if (/model|entity|dto|domain|schema/.test(noExt))                 return 5;
-  if (/config|settings|startup|program|main|app/.test(noExt))       return 4;
-  if (/global|filter|middleware|pipeline/.test(noExt))              return 3;
+  // High-value patterns (Java/C# + Angular combined)
+  if (/controller|page|handler|endpoint|router|route|component/.test(noExt)) return 10;
+  if (/service|business|bll|usecase|interactor/.test(noExt))                 return 8;
+  if (/interface|iservice|irepository|contract|guard|resolver/.test(noExt))  return 7;
+  if (/repository|dal|dataaccess|store|reducer|effect|facade/.test(noExt))   return 6;
+  if (/model|entity|dto|domain|schema/.test(noExt))                          return 5;
+  if (/config|settings|startup|program|main|app|routes|routing/.test(noExt)) return 4;
+  if (/global|filter|middleware|pipeline|interceptor|pipe|directive/.test(noExt)) return 3;
 
   return 1;
 }

@@ -214,6 +214,44 @@ Only write stories for features clearly implemented in the code.`,
     }),
   },
 
+  // ── Business Functions Guide ─────────────────────────────────────────────────
+  {
+    id:         'business-guide',
+    label:      'Business Functions Guide',
+    detail:     'Non-technical overview of each application function for business stakeholders',
+    category:   'Requirements',
+    outputPath: 'docs/business-guide.md',
+    prompt: ctx => ({
+      system: `You are a business analyst documenting the "${ctx.name}" application for non-technical business stakeholders.
+RULES (non-negotiable):
+1. Base every claim on the provided source code and structure. Do NOT invent features, workflows, or capabilities absent from the code.
+2. If a section cannot be substantiated from the provided context, write: "_Not found in the provided codebase._"
+3. Output clean Markdown only — no preamble, no "sure, here is…", no explanations outside the document.
+4. Use plain business language throughout. Avoid technical terms (no class names, method signatures, SQL, HTTP verbs, or framework names). If a technical concept must be mentioned, explain it in one plain-English sentence.
+
+Write a Business Functions Guide with these sections:
+# Business Functions Guide: <application name>
+## What This Application Does
+One paragraph summarising the business purpose of the application and the problem it solves.
+## Who Uses It
+A brief description of each type of user and their role in the organisation.
+## Application Functions
+For each distinct business function identified in the codebase:
+### <Function Name>
+**What it does:** One or two sentences in plain English.
+**Business value:** Why this function matters to the organisation.
+**Who uses it:** Which user types interact with this function.
+**Key steps:** Numbered list of the actions a user takes to complete this function (no technical detail).
+## Business Rules
+Plain-English list of the rules the application enforces (e.g. "A request cannot be approved by the same person who submitted it."). Derive these from validation logic, guards, and conditional branches in the code.
+## Glossary of Business Terms
+| Term | Plain-English Definition |
+|------|--------------------------|
+Only include terms that appear in the application and would be unfamiliar to a non-technical stakeholder.`,
+      user: `Write the Business Functions Guide for this application.\n\n${codeBundle(ctx)}`,
+    }),
+  },
+
   // ── Functional Spec ──────────────────────────────────────────────────────────
   {
     id:         'functional-spec',
