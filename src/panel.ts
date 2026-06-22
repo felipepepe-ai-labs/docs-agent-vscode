@@ -86,13 +86,23 @@ export class GraphPanel {
   }
 
   private reloadGraph(): void {
-    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!root) return;
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length === 0) return;
 
     this.panel.webview.postMessage({ type: 'reloading' });
     setImmediate(() => {
-      this.graph = buildGraph(root);
-      saveGraph(root, this.graph);
+      const merged = new CodeGraph();
+      for (const folder of folders) {
+        const root = folder.uri.fsPath;
+        const g = buildGraph(root);
+        saveGraph(root, g);
+        for (const node of g.nodes.values())   merged.addNode(node);
+        for (const e of g.callEdges)           merged.addCallEdge(e);
+        for (const e of g.tableEdges)          merged.addTableEdge(e);
+        for (const e of g.implementsEdges)     merged.addImplementsEdge(e);
+        for (const e of g.injectsEdges)        merged.addInjectsEdge(e);
+      }
+      this.graph = merged;
       this.panel.webview.postMessage({
         type:      'stats',
         nodeCount: this.graph.nodeCount,

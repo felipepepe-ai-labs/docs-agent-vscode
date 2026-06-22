@@ -34,19 +34,12 @@ function loadPrimerFile(name: string): string {
 export function activate(context: vscode.ExtensionContext) {
   initDb(context.globalStorageUri.fsPath);
 
-  // Load graph from DB cache first; fall back to full index if no snapshot exists.
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (workspaceRoot) {
+  // Load graph from DB cache for every workspace folder; merge into one CodeGraph.
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  if (folders.length > 0) {
     setImmediate(() => {
-      const cached = loadGraphFromDb(workspaceRoot);
-      if (cached) {
-        codeGraph = cached;
-        console.log(`[Docs Agent] Graph loaded from DB — ${codeGraph.nodeCount} nodes, ${codeGraph.edgeCount} edges`);
-      } else {
-        codeGraph = buildGraph(workspaceRoot);
-        saveGraph(workspaceRoot, codeGraph);
-        console.log(`[Docs Agent] Graph indexed and saved — ${codeGraph.nodeCount} nodes, ${codeGraph.edgeCount} edges`);
-      }
+      codeGraph = mergeGraphs(folders.map(f => f.uri.fsPath));
+      console.log(`[Docs Agent] Graph ready — ${codeGraph.nodeCount} nodes, ${codeGraph.edgeCount} edges (${folders.length} folder(s))`);
     });
   }
 
@@ -165,7 +158,7 @@ ${codeBundle}`;
   });
 
   const projectCommand = vscode.commands.registerCommand('docsAgent.documentProject', async () => {
-    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const root = await pickWorkspaceRoot();
     if (!root) {
       vscode.window.showErrorMessage('Docs Agent: Open a workspace folder first.');
       return;
@@ -313,6 +306,51 @@ function renderImpactDoc(symbol: string, impact: ImpactSummary, nodes: number, e
   }
 
   return lines.join('\n');
+}
+
+// ── Workspace helpers ─────────────────────────────────────────────────────────
+
+// Merges graphs for one or more workspace roots into a single CodeGraph,
+// loading from the DB cache where available.
+function mergeGraphs(roots: string[]): CodeGraph {
+  const merged = new CodeGraph();
+  for (const root of roots) {
+    const cached = loadGraphFromDb(root);
+    const g = cached ?? buildGraph(root);
+    if (!cached) saveGraph(root, g);
+    for (const node of g.nodes.values())   merged.addNode(node);
+    for (const e of g.callEdges)           merged.addCallEdge(e);
+    for (const e of g.tableEdges)          merged.addTableEdge(e);
+    for (const e of g.implementsEdges)     merged.addImplementsEdge(e);
+    for (const e of g.injectsEdges)        merged.addInjectsEdge(e);
+  }
+  return merged;
+}
+
+// Returns the single workspace root, or prompts the user to pick one when
+// there are multiple folders open.
+async function pickWorkspaceRoot(): Promise<string | undefined> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) return undefined;
+  if (folders.length === 1) return folders[0].uri.fsPath;
+
+  const activeFolder = vscode.window.activeTextEditor
+    ? vscode.workspace.getWorkspaceFolder(vscode.window.activeTextEditor.document.uri)
+    : undefined;
+
+  const items = folders.map(f => ({
+    label:       f.name,
+    description: f.uri.fsPath,
+    picked:      f === activeFolder,
+    fsPath:      f.uri.fsPath,
+  }));
+
+  const picked = await vscode.window.showQuickPick(items, {
+    placeHolder: 'Select which project to document',
+    title:       'Docs Agent — Select Project',
+  });
+
+  return picked?.fsPath;
 }
 
 export function deactivate() {}
