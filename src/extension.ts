@@ -104,7 +104,10 @@ ${codeBundle}`;
             ? (sym: string) => codeGraph!.queryImpact(sym)
             : undefined;
           const markdown = renderMarkdown(result, filePath, lookupImpact);
-          const outputPath = writeDoc(markdown, filePath, workspaceRoot);
+          const modelLabel = config.provider === 'vscode-lm'
+            ? `VS Code LM${config.vscodeLmFamily ? ` / ${config.vscodeLmFamily}` : ''}`
+            : `${config.ollamaModel} / Ollama`;
+          const outputPath = writeDoc(markdown, filePath, workspaceRoot, modelLabel);
 
           const summary =
             result.rejected.length > 0
