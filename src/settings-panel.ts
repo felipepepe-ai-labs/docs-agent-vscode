@@ -46,6 +46,7 @@ export class SettingsPanel {
         model:          cfg.get<string>('model',          'qwen3:35b'),
         vscodeLmFamily: cfg.get<string>('vscodeLmFamily', ''),
         docsFolder:     cfg.get<string>('docsFolder',     'docs'),
+        language:       cfg.get<string>('language',       'english'),
       },
     });
   }
@@ -69,6 +70,7 @@ export class SettingsPanel {
     await cfg.update('model',          settings['model'],          target);
     await cfg.update('vscodeLmFamily', settings['vscodeLmFamily'], target);
     await cfg.update('docsFolder',     settings['docsFolder'],     target);
+    await cfg.update('language',       settings['language'],       target);
   }
 
   private async testOllama(url: string): Promise<void> {
@@ -191,6 +193,15 @@ export class SettingsPanel {
     <label for="docsFolder">Docs output folder</label>
     <input id="docsFolder" type="text" placeholder="docs" />
     <p class="hint">Workspace-relative path where generated <code>.md</code> files are written.</p>
+  </div>
+
+  <div class="section">
+    <label for="language">Documentation language</label>
+    <select id="language">
+      <option value="english">English</option>
+      <option value="spanish">Spanish</option>
+    </select>
+    <p class="hint">Language used for all generated documentation content.</p>
   </div>
 
   <div class="actions">

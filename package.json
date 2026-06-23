@@ -3,7 +3,7 @@
   "publisher": "felipepepe",
   "displayName": "Docs Agent",
   "description": "Anti-hallucination documentation generator powered by local Ollama",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -70,6 +70,19 @@
           "type": "string",
           "default": "docs",
           "description": "Folder (relative to workspace root) where generated .md files are written"
+        },
+        "docsAgent.language": {
+          "type": "string",
+          "enum": [
+            "english",
+            "spanish"
+          ],
+          "enumDescriptions": [
+            "Generate documentation in English",
+            "Generate documentation in Spanish"
+          ],
+          "default": "english",
+          "description": "Output language for all generated documentation"
         }
       }
     }
@@ -81,7 +94,8 @@
     "build:ext": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:better-sqlite3 --format=cjs --platform=node",
     "build:webview": "esbuild src/webview/graph-panel.ts --bundle --outfile=media/graph-panel.js --format=iife --platform=browser --minify",
     "build:settings": "esbuild src/webview/settings-panel.ts --bundle --outfile=media/settings-panel.js --format=iife --platform=browser --minify",
-    "build": "pnpm run build:ext && pnpm run build:webview && pnpm run build:settings",
+    "build:mcp": "esbuild mcp-server/src/index.ts --bundle --outfile=mcp-server/dist/index.js --external:better-sqlite3 --format=esm --platform=node",
+    "build": "pnpm run build:ext && pnpm run build:webview && pnpm run build:settings && pnpm run build:mcp",
     "copy-native": "node scripts/copy-native.js",
     "watch:ext": "pnpm run build:ext -- --watch",
     "watch:webview": "pnpm run build:webview -- --watch",

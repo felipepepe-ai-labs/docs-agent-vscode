@@ -6,3 +6,9 @@ tsconfig.json
 .claude/
 pnpm-lock.yaml
 pnpm-workspace.yaml
+CLAUDE.md
+scripts/**
+mcp-server/src/**
+mcp-server/node_modules/**
+mcp-server/tsconfig.json
+mcp-server/package-lock.json
