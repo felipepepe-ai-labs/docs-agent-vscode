@@ -16,6 +16,13 @@ import { normalizeMermaidBlocks, openDoc, writeDoc } from './writer';
 const PRIMERS_DIR = path.join(__dirname, '..', 'src', 'primers');
 let codeGraph: CodeGraph | null = null;
 
+function languageInstruction(language: string): string {
+  if (language === 'spanish') {
+    return 'Write the entire document in Spanish. All prose, headings, labels, and descriptions must be in Spanish. Code identifiers, file paths, and technical keywords used as identifiers may remain in English.';
+  }
+  return '';
+}
+
 function loadPrimer(filePath: string): string {
   if (filePath.endsWith('.java'))                                          return loadPrimerFile('springboot.md');
   if (filePath.endsWith('.cs'))                                            return loadPrimerFile('webforms.md');
@@ -79,12 +86,16 @@ For every entry you emit, "file" must match one of the // FILE: paths exactly, a
 
 ${codeBundle}`;
 
-          const config = getLlmConfig();
+          const config   = getLlmConfig();
+          const language = vscode.workspace.getConfiguration('docsAgent').get<string>('language', 'english');
+          const langNote = languageInstruction(language);
+          const fullSystemPrompt = langNote ? `${systemPrompt}\n\n---\n\n${langNote}` : systemPrompt;
+
           const providerLabel = config.provider === 'vscode-lm' ? 'VS Code LM' : 'Ollama';
           progress.report({ message: `Calling ${providerLabel}...` });
           const raw = await chat(
             [
-              { role: 'system', content: systemPrompt },
+              { role: 'system', content: fullSystemPrompt },
               { role: 'user', content: userPrompt },
             ],
             config
@@ -200,9 +211,12 @@ ${codeBundle}`;
       async (progress, token) => {
         try {
           progress.report({ message: 'Scanning workspace…', increment: 0 });
-          const ctx    = buildProjectContext(root);
-          const config = getLlmConfig();
-          const docsFolder = vscode.workspace.getConfiguration('docsAgent').get<string>('docsFolder', 'docs');
+          const ctx      = buildProjectContext(root);
+          const config   = getLlmConfig();
+          const cfg      = vscode.workspace.getConfiguration('docsAgent');
+          const docsFolder = cfg.get<string>('docsFolder', 'docs');
+          const language   = cfg.get<string>('language', 'english');
+          const langNote   = languageInstruction(language);
 
           const increment = 90 / chosenTypes.length;
           const generated: string[] = [];
@@ -218,10 +232,11 @@ ${codeBundle}`;
 
             try {
               const { system, user } = docType.prompt(ctx);
+              const systemWithLang = langNote ? `${system}\n\n---\n\n${langNote}` : system;
               const content = await chat(
                 [
-                  { role: 'system', content: system },
-                  { role: 'user',   content: user   },
+                  { role: 'system', content: systemWithLang },
+                  { role: 'user',   content: user           },
                 ],
                 config,
                 token

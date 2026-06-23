@@ -27,6 +27,23 @@ fs.writeFileSync(path.join(bindingsDst, 'bindings.js'), [
 
 console.log('better-sqlite3 + bindings shim written to dist/node_modules');
 
+// Also copy to mcp-server/dist/node_modules — the MCP server runs as a standalone
+// Node process and cannot share the extension host's node_modules at runtime.
+const mcpDistMod = path.resolve(root, 'mcp-server/dist/node_modules');
+fs.rmSync(mcpDistMod, { recursive: true, force: true });
+fs.mkdirSync(mcpDistMod, { recursive: true });
+fs.cpSync(bsSrc, path.resolve(mcpDistMod, 'better-sqlite3'), { recursive: true });
+const mcpBindingsDst = path.resolve(mcpDistMod, 'bindings');
+fs.mkdirSync(mcpBindingsDst, { recursive: true });
+fs.writeFileSync(path.join(mcpBindingsDst, 'package.json'), JSON.stringify({ name: 'bindings', main: 'bindings.js' }));
+fs.writeFileSync(path.join(mcpBindingsDst, 'bindings.js'), [
+  "module.exports = function bindings(name) {",
+  "  var n = typeof name === 'string' ? name : name.bindings;",
+  "  return require('../better-sqlite3/build/Release/' + n);",
+  "};",
+].join('\n'));
+console.log('better-sqlite3 + bindings shim written to mcp-server/dist/node_modules');
+
 // Bump patch version in package.json
 const pkgPath = path.resolve(root, 'package.json');
 const pkg     = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));

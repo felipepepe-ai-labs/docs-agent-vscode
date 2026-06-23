@@ -7,6 +7,7 @@ interface Settings {
   model:          string;
   vscodeLmFamily: string;
   docsFolder:     string;
+  language:       string;
 }
 
 interface VsCodeModel { id: string; family: string; name: string; vendor: string }
@@ -27,6 +28,7 @@ const vscodeModelList   = document.getElementById('vscode-model-list') as HTMLDa
 const listVsCodeBtn     = document.getElementById('listVsCode')    as HTMLButtonElement;
 
 const folderInput     = document.getElementById('docsFolder')      as HTMLInputElement;
+const languageSelect  = document.getElementById('language')        as HTMLSelectElement;
 const saveBtn         = document.getElementById('save')            as HTMLButtonElement;
 const statusEl        = document.getElementById('status')!;
 
@@ -52,6 +54,7 @@ window.addEventListener('message', ({ data }: MessageEvent) => {
     modelInput.value        = s.model;
     vscodeFamilyInput.value = s.vscodeLmFamily;
     folderInput.value       = s.docsFolder;
+    languageSelect.value    = s.language;
     applyProvider(s.provider);
   }
 
@@ -90,6 +93,7 @@ saveBtn.addEventListener('click', () => {
       model:          modelInput.value.trim(),
       vscodeLmFamily: vscodeFamilyInput.value.trim(),
       docsFolder:     folderInput.value.trim(),
+      language:       languageSelect.value,
     } satisfies Settings,
   });
   flash('Settings saved.', 'ok');
