@@ -64,3 +64,8 @@ Auto-load from the global Copilot skills catalog when context matches:
 | SQLite schema, queries, transactions | `db-architect` |
 | Creating or preparing a PR | `branch-pr` |
 | Running tests (vitest) | `test-runner` |
+| SQLite storage, FTS5, indexing strategy | `ddia-storage-retrieval` |
+| Transaction design, WAL, atomicity, isolation | `ddia-transactions` |
+| Graph schema, relational vs. document trade-offs | `ddia-data-models` |
+| Architectural trade-offs, any system design decision | `ddia-architecture-tradeoffs` |
+| Any DDIA question — auto-routes to the right skill | `ddia-skill-router` |
