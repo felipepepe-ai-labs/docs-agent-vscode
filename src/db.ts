@@ -92,20 +92,16 @@ function runTransaction(fn: () => void): void {
 }
 
 export function saveGraph(workspaceRoot: string, graph: CodeGraph): void {
-  if (!db) return;
+  if (!db) { console.error('[Docs Agent] DB not initialized — graph will not be cached'); return; }
   const now = Date.now();
 
   db.prepare('INSERT OR IGNORE INTO workspaces (root_path) VALUES (?)').run(workspaceRoot);
   db.prepare('UPDATE workspaces SET last_indexed = ? WHERE root_path = ?').run(now, workspaceRoot);
   const ws = db.prepare('SELECT id FROM workspaces WHERE root_path = ?').get(workspaceRoot) as { id: number };
 
-  const snapId = Number(db.prepare('INSERT INTO snapshots (workspace_id, created_at) VALUES (?, ?)').run(ws.id, now).lastInsertRowid);
-
-  const pruneIds = (db.prepare(
-    'SELECT id FROM snapshots WHERE workspace_id = ? ORDER BY created_at DESC LIMIT -1 OFFSET ?'
-  ).all(ws.id, MAX_SNAPSHOTS) as { id: number }[]).map(r => r.id);
-
   runTransaction(() => {
+    const snapId = Number(db!.prepare('INSERT INTO snapshots (workspace_id, created_at) VALUES (?, ?)').run(ws.id, now).lastInsertRowid);
+
     const insNode = db!.prepare('INSERT INTO nodes (snapshot_id,symbol,file,line,kind) VALUES (?,?,?,?,?)');
     for (const n of graph.nodes.values()) insNode.run(snapId, n.symbol, n.file, n.line, n.kind);
 
@@ -121,8 +117,12 @@ export function saveGraph(workspaceRoot: string, graph: CodeGraph): void {
     const insInj = db!.prepare('INSERT INTO injects_edges (snapshot_id,consumer,dependency,field_name) VALUES (?,?,?,?)');
     for (const e of graph.injectsEdges) insInj.run(snapId, e.consumer, e.dependency, e.fieldName);
 
-    if (pruneIds.length > 0) {
-      db!.prepare(`DELETE FROM snapshots WHERE id IN (${pruneIds.join(',')})`).run();
+    const pruneIds = (db!.prepare(
+      'SELECT id FROM snapshots WHERE workspace_id = ? ORDER BY created_at DESC LIMIT -1 OFFSET ?'
+    ).all(ws.id, MAX_SNAPSHOTS) as { id: number }[]).map(r => r.id);
+
+    for (const pruneId of pruneIds) {
+      db!.prepare('DELETE FROM snapshots WHERE id = ?').run(pruneId);
     }
   });
 }

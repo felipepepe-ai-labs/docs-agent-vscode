@@ -155,21 +155,25 @@ ${codeBundle}`;
       return;
     }
 
-    const editor = vscode.window.activeTextEditor;
-    const wordRange = editor?.document.getWordRangeAtPosition(editor.selection.active);
-    const wordUnderCursor = wordRange ? editor!.document.getText(wordRange) : '';
+    try {
+      const editor = vscode.window.activeTextEditor;
+      const wordRange = editor?.document.getWordRangeAtPosition(editor.selection.active);
+      const wordUnderCursor = wordRange ? editor!.document.getText(wordRange) : '';
 
-    const symbolName = await vscode.window.showInputBox({
-      value: wordUnderCursor,
-      prompt: 'Symbol to analyze — class name, method name, or ClassName.methodName',
-      placeHolder: 'e.g.  OrderService  or  OrderService.confirm',
-    });
-    if (!symbolName) return;
+      const symbolName = await vscode.window.showInputBox({
+        value: wordUnderCursor,
+        prompt: 'Symbol to analyze — class name, method name, or ClassName.methodName',
+        placeHolder: 'e.g.  OrderService  or  OrderService.confirm',
+      });
+      if (!symbolName) return;
 
-    const impact = codeGraph.queryImpact(symbolName);
-    const markdown = renderImpactDoc(symbolName, impact, codeGraph.nodeCount, codeGraph.edgeCount);
-    const doc = await vscode.workspace.openTextDocument({ content: markdown, language: 'markdown' });
-    await vscode.window.showTextDocument(doc, { preview: true });
+      const impact = codeGraph.queryImpact(symbolName);
+      const markdown = renderImpactDoc(symbolName, impact, codeGraph.nodeCount, codeGraph.edgeCount);
+      const doc = await vscode.workspace.openTextDocument({ content: markdown, language: 'markdown' });
+      await vscode.window.showTextDocument(doc, { preview: true });
+    } catch (err) {
+      vscode.window.showErrorMessage(`Docs Agent: ${(err as Error).message}`);
+    }
   });
 
   const settingsCommand = vscode.commands.registerCommand('docsAgent.openSettings', () => {
@@ -250,14 +254,16 @@ ${codeBundle}`;
               // README lives at workspace root; everything else goes flat into docsFolder
               const filename = path.basename(docType.outputPath);
               const relOut   = filename === 'README.md' ? filename : `${docsFolder}/${filename}`;
-              const absOut  = path.join(root, relOut);
+              const absOut   = path.resolve(root, relOut);
+              if (!absOut.startsWith(path.resolve(root) + path.sep) && absOut !== path.resolve(root)) {
+                throw new Error(`docsFolder setting points outside the workspace root: ${docsFolder}`);
+              }
               fs.mkdirSync(path.dirname(absOut), { recursive: true });
               fs.writeFileSync(absOut, normalizeMermaidBlocks(content), 'utf8');
               generated.push(relOut);
             } catch (err) {
-              const msg = (err as Error).message;
-              if (msg.includes('Cancelled') || msg.includes('cancel')) break;
-              vscode.window.showWarningMessage(`Docs Agent: Failed to generate "${docType.label}" — ${msg}`);
+              if (token.isCancellationRequested || err instanceof vscode.CancellationError) break;
+              vscode.window.showWarningMessage(`Docs Agent: Failed to generate "${docType.label}" — ${(err as Error).message}`);
             }
           }
 

@@ -35,7 +35,8 @@ export async function chat(
   }
   return ollamaChat(
     messages.map(m => ({ role: m.role, content: m.content })),
-    { url: config.ollamaUrl, model: config.ollamaModel }
+    { url: config.ollamaUrl, model: config.ollamaModel },
+    token
   );
 }
 

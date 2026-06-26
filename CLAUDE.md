@@ -49,7 +49,7 @@ Graph is loaded eagerly on extension activation from the SQLite DB cache (`src/d
 
 ### SQLite persistence (`src/db.ts`)
 
-Uses `better-sqlite3` (synchronous, native addon). **Must remain external to the esbuild bundle** (`--external:better-sqlite3`). The DB lives in VS Code's `globalStorageUri`. An FTS5 virtual table with trigram tokenizer enables fuzzy symbol search via `searchNodes`. The `nodes_fts` table is kept in sync via `AFTER INSERT` / `AFTER DELETE` triggers.
+Uses **Node.js built-in `node:sqlite`** (`DatabaseSync`) — no native addon, no bundler exclusion needed. The DB lives in VS Code's `globalStorageUri`. An FTS5 virtual table with trigram tokenizer enables fuzzy symbol search via `searchNodes`. The `nodes_fts` table is kept in sync via `AFTER INSERT` / `AFTER DELETE` triggers. `node:sqlite` has no `.transaction()` helper; use the local `runTransaction()` wrapper (`BEGIN`/`COMMIT`/`ROLLBACK`) for atomic writes.
 
 ### LLM providers (`src/llm.ts`, `src/ollama.ts`)
 
@@ -89,6 +89,6 @@ Add new primers by creating a `.md` file and extending `loadPrimer` in `extensio
 
 ## Key constraints
 
-- `better-sqlite3` is a native Node binary. It **must** be listed in `.vscodeignore` only via the exception pattern (`!node_modules/better-sqlite3/**`) and excluded from esbuild with `--external:better-sqlite3`. Never bundle it.
-- The webview CSP allows no inline scripts — only nonce-protected external scripts from `localResourceRoots`. Do not add `'unsafe-inline'` to the policy.
+- `node:sqlite` is a Node.js built-in — no bundler exclusion or `.vscodeignore` entry needed.
+- The webview CSP allows no inline scripts — only nonce-protected external scripts from `localResourceRoots`. Do not add `'unsafe-inline'` to the policy. Nonces must be generated with `crypto.randomUUID()`, never `Math.random()`.
 - `context.ts` import resolution is hardcoded to `com.example.*` and `src/main/java`. Update both constants if the target Java package changes.

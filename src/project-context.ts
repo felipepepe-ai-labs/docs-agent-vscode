@@ -171,7 +171,7 @@ function collectFiles(root: string): string[] {
   const results: string[] = [];
   function scan(dir: string): void {
     let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (err) { console.warn('[Docs Agent] Cannot scan dir:', dir, err); return; }
     for (const e of entries) {
       if (SKIP_DIRS.has(e.name)) continue;
       const full = path.join(dir, e.name);
@@ -185,7 +185,7 @@ function collectFiles(root: string): string[] {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function safeRead(fp: string): string {
-  try { return fs.readFileSync(fp, 'utf8'); } catch { return ''; }
+  try { return fs.readFileSync(fp, 'utf8'); } catch (err) { console.warn('[Docs Agent] Cannot read:', fp, err); return ''; }
 }
 
 function findFirst(root: string, ext: string): string | null {

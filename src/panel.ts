@@ -72,7 +72,9 @@ export class GraphPanel {
       case 'expand':   this.sendSubgraph(msg.nodeId);             break;
       case 'overview': this.sendOverviewGraph();                  break;
       case 'reload':   this.reloadGraph();                        break;
-      case 'openFile': void this.openFile(msg.file, msg.line).catch(() => undefined); break;
+      case 'openFile': this.openFile(msg.file, msg.line).catch(err =>
+        vscode.window.showErrorMessage(`Docs Agent: Cannot open file — ${(err as Error).message}`)
+      ); break;
       case 'query':    this.sendQueryResult(msg.kind, msg.target); break;
     }
   }

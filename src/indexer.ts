@@ -5,11 +5,16 @@ import { CodeGraph, SqlOperation } from './graph';
 export function buildGraph(workspaceRoot: string): CodeGraph {
   const graph = new CodeGraph();
   for (const file of collectSourceFiles(workspaceRoot)) {
+    let content: string;
     try {
-      const content = fs.readFileSync(file, 'utf8');
+      content = fs.readFileSync(file, 'utf8');
+    } catch { continue; }
+    try {
       if (file.endsWith('.java')) parseJava(file, content, graph);
       else parseCSharp(file, content, graph);
-    } catch { /* unreadable — skip */ }
+    } catch (err) {
+      console.error(`[Docs Agent] Parse failed: ${file}`, err);
+    }
   }
   return graph;
 }
@@ -20,7 +25,7 @@ function collectSourceFiles(root: string): string[] {
 
   function scan(dir: string): void {
     let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (err) { console.warn('[Docs Agent] Cannot scan dir:', dir, err); return; }
     for (const e of entries) {
       if (SKIP.has(e.name)) continue;
       const full = path.join(dir, e.name);

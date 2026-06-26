@@ -18,16 +18,40 @@ export function getOllamaConfig(): OllamaConfig {
   };
 }
 
-export async function chat(messages: OllamaMessage[], config: OllamaConfig): Promise<string> {
-  let response: Response;
+export function assertSafeUrl(url: string): void {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { throw new Error(`Invalid Ollama URL: ${url}`); }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error(`Ollama URL must use http or https. Got: ${parsed.protocol}`);
+  }
+  if (parsed.hostname.startsWith('169.254.') || parsed.hostname === 'fd00:ec2::254') {
+    throw new Error(`Ollama URL must not target cloud metadata endpoints.`);
+  }
+}
 
+export async function chat(
+  messages: OllamaMessage[],
+  config: OllamaConfig,
+  token?: { isCancellationRequested: boolean; onCancellationRequested: (cb: () => void) => void }
+): Promise<string> {
+  assertSafeUrl(config.url);
+
+  const controller = new AbortController();
+  if (token) {
+    if (token.isCancellationRequested) { controller.abort(); }
+    else { token.onCancellationRequested(() => controller.abort()); }
+  }
+
+  let response: Response;
   try {
     response = await fetch(`${config.url}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: config.model, messages, stream: true }),
+      signal: controller.signal,
     });
   } catch (err) {
+    if (controller.signal.aborted) throw new Error('Cancelled');
     throw new Error(
       `Cannot reach Ollama at ${config.url}. Is it running? (${(err as Error).message})`
     );
@@ -56,11 +80,12 @@ export async function chat(messages: OllamaMessage[], config: OllamaConfig): Pro
     for (const line of text.split('\n')) {
       if (!line.trim()) continue;
       try {
-        const parsed = JSON.parse(line);
-        if (parsed.message?.content) {
-          chunks.push(parsed.message.content);
-        }
-      } catch {
+        const parsed = JSON.parse(line) as Record<string, unknown>;
+        if (parsed['error']) throw new Error(`Ollama error: ${parsed['error']}`);
+        const content = (parsed['message'] as Record<string, unknown> | undefined)?.['content'];
+        if (typeof content === 'string') chunks.push(content);
+      } catch (e) {
+        if ((e as Error).message.startsWith('Ollama error:')) throw e;
         // incomplete JSON chunk — skip
       }
     }

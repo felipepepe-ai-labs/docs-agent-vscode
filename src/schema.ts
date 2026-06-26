@@ -82,12 +82,13 @@ function validateEntry(entry: unknown): string | null {
   return null;
 }
 
+import * as path from 'path';
 import type { ImpactSummary } from './graph';
 
 export type ImpactLookup = (symbol: string) => ImpactSummary | null;
 
 export function renderMarkdown(result: DocResult, sourceFile: string, lookupImpact?: ImpactLookup): string {
-  const fileName = sourceFile.split('/').pop() ?? sourceFile;
+  const fileName = path.basename(sourceFile);
   const lines: string[] = [
     `# Documentation: ${fileName}`,
     '',

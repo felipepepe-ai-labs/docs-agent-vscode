@@ -7,9 +7,13 @@ export interface FileContext {
 }
 
 export function buildContext(activeFilePath: string, workspaceRoot: string): FileContext {
-  const primaryContent = fs.readFileSync(activeFilePath, 'utf8');
+  let primaryContent: string;
+  try {
+    primaryContent = fs.readFileSync(activeFilePath, 'utf8');
+  } catch (err) {
+    throw new Error(`Cannot read file "${activeFilePath}": ${(err as Error).message}`);
+  }
   const dependencies = resolveDependencies(activeFilePath, primaryContent, workspaceRoot);
-
   return { primary: { filePath: activeFilePath, content: primaryContent }, dependencies };
 }
 
@@ -27,7 +31,9 @@ function resolveDependencies(
     const interfaceName = fileName.replace(/Impl$/, '');
     const interfacePath = path.join(fileDir, `${interfaceName}.java`);
     if (fs.existsSync(interfacePath)) {
-      deps.push({ filePath: interfacePath, content: fs.readFileSync(interfacePath, 'utf8') });
+      try {
+        deps.push({ filePath: interfacePath, content: fs.readFileSync(interfacePath, 'utf8') });
+      } catch { /* unreadable dependency — skip */ }
     }
   }
 
@@ -41,7 +47,9 @@ function resolveDependencies(
     const candidate = path.join(workspaceRoot, 'src/main/java', relativePath);
 
     if (fs.existsSync(candidate) && candidate !== filePath && !deps.find(d => d.filePath === candidate)) {
-      deps.push({ filePath: candidate, content: fs.readFileSync(candidate, 'utf8') });
+      try {
+        deps.push({ filePath: candidate, content: fs.readFileSync(candidate, 'utf8') });
+      } catch { /* unreadable dependency — skip */ }
     }
   }
 
