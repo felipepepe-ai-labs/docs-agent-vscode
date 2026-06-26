@@ -45,8 +45,13 @@ export function activate(context: vscode.ExtensionContext) {
   const folders = vscode.workspace.workspaceFolders ?? [];
   if (folders.length > 0) {
     setImmediate(() => {
-      codeGraph = mergeGraphs(folders.map(f => f.uri.fsPath));
-      console.log(`[Docs Agent] Graph ready — ${codeGraph.nodeCount} nodes, ${codeGraph.edgeCount} edges (${folders.length} folder(s))`);
+      try {
+        codeGraph = mergeGraphs(folders.map(f => f.uri.fsPath));
+        console.log(`[Docs Agent] Graph ready — ${codeGraph.nodeCount} nodes, ${codeGraph.edgeCount} edges (${folders.length} folder(s))`);
+      } catch (err) {
+        console.error('[Docs Agent] Graph indexing failed:', err);
+        vscode.window.showWarningMessage(`Docs Agent: Graph indexing failed — ${(err as Error).message}`);
+      }
     });
   }
 

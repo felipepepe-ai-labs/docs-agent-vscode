@@ -71,13 +71,15 @@ async function chatVsCodeLm(
     }
   }
 
-  const cts      = new vscode.CancellationTokenSource();
-  const response = await model.sendRequest(lmMessages, {}, token ?? cts.token);
-
-  let result = '';
-  for await (const chunk of response.text) {
-    result += chunk;
+  const cts = new vscode.CancellationTokenSource();
+  try {
+    const response = await model.sendRequest(lmMessages, {}, token ?? cts.token);
+    let result = '';
+    for await (const chunk of response.text) {
+      result += chunk;
+    }
+    return result;
+  } finally {
+    cts.dispose();
   }
-  cts.dispose();
-  return result;
 }

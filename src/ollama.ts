@@ -43,8 +43,9 @@ export async function chat(messages: OllamaMessage[], config: OllamaConfig): Pro
     throw new Error(`Ollama returned HTTP ${response.status}: ${body}`);
   }
 
+  if (!response.body) throw new Error('Ollama response has no body');
   const chunks: string[] = [];
-  const reader = response.body!.getReader();
+  const reader = response.body.getReader();
   const decoder = new TextDecoder();
 
   while (true) {

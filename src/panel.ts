@@ -72,7 +72,7 @@ export class GraphPanel {
       case 'expand':   this.sendSubgraph(msg.nodeId);             break;
       case 'overview': this.sendOverviewGraph();                  break;
       case 'reload':   this.reloadGraph();                        break;
-      case 'openFile': this.openFile(msg.file, msg.line);         break;
+      case 'openFile': void this.openFile(msg.file, msg.line).catch(() => undefined); break;
       case 'query':    this.sendQueryResult(msg.kind, msg.target); break;
     }
   }
@@ -91,24 +91,28 @@ export class GraphPanel {
 
     this.panel.webview.postMessage({ type: 'reloading' });
     setImmediate(() => {
-      const merged = new CodeGraph();
-      for (const folder of folders) {
-        const root = folder.uri.fsPath;
-        const g = buildGraph(root);
-        saveGraph(root, g);
-        for (const node of g.nodes.values())   merged.addNode(node);
-        for (const e of g.callEdges)           merged.addCallEdge(e);
-        for (const e of g.tableEdges)          merged.addTableEdge(e);
-        for (const e of g.implementsEdges)     merged.addImplementsEdge(e);
-        for (const e of g.injectsEdges)        merged.addInjectsEdge(e);
+      try {
+        const merged = new CodeGraph();
+        for (const folder of folders) {
+          const root = folder.uri.fsPath;
+          const g = buildGraph(root);
+          saveGraph(root, g);
+          for (const node of g.nodes.values())   merged.addNode(node);
+          for (const e of g.callEdges)           merged.addCallEdge(e);
+          for (const e of g.tableEdges)          merged.addTableEdge(e);
+          for (const e of g.implementsEdges)     merged.addImplementsEdge(e);
+          for (const e of g.injectsEdges)        merged.addInjectsEdge(e);
+        }
+        this.graph = merged;
+        this.panel.webview.postMessage({
+          type:      'stats',
+          nodeCount: this.graph.nodeCount,
+          edgeCount: this.graph.edgeCount,
+        });
+        this.sendOverviewGraph();
+      } catch (err) {
+        vscode.window.showErrorMessage(`Docs Agent: Re-index failed — ${(err as Error).message}`);
       }
-      this.graph = merged;
-      this.panel.webview.postMessage({
-        type:      'stats',
-        nodeCount: this.graph.nodeCount,
-        edgeCount: this.graph.edgeCount,
-      });
-      this.sendOverviewGraph();
     });
   }
 
@@ -452,8 +456,7 @@ export class GraphPanel {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function randomNonce(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  return Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  return crypto.randomUUID().replace(/-/g, '');
 }
 
 function dedupeEdges(edges: { source: string; target: string; label: string }[]) {
