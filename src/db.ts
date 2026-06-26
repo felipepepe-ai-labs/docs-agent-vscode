@@ -1,17 +1,17 @@
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import * as fs from 'fs';
 import * as path from 'path';
 import { CallEdge, CodeGraph, ImplementsEdge, InjectsEdge, SymbolNode, TableEdge } from './graph';
 
 const MAX_SNAPSHOTS = 10;
 
-let db: Database.Database | null = null;
+let db: DatabaseSync | null = null;
 
 export function initDb(storagePath: string): void {
   fs.mkdirSync(storagePath, { recursive: true });
-  db = new Database(path.join(storagePath, 'graph.db'));
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  db = new DatabaseSync(path.join(storagePath, 'graph.db'));
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA foreign_keys = ON');
   db.exec(`
     CREATE TABLE IF NOT EXISTS workspaces (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,6 +80,17 @@ export function initDb(storagePath: string): void {
   `);
 }
 
+function runTransaction(fn: () => void): void {
+  db!.exec('BEGIN');
+  try {
+    fn();
+    db!.exec('COMMIT');
+  } catch (err) {
+    try { db!.exec('ROLLBACK'); } catch { /* ignore */ }
+    throw err;
+  }
+}
+
 export function saveGraph(workspaceRoot: string, graph: CodeGraph): void {
   if (!db) return;
   const now = Date.now();
@@ -88,13 +99,13 @@ export function saveGraph(workspaceRoot: string, graph: CodeGraph): void {
   db.prepare('UPDATE workspaces SET last_indexed = ? WHERE root_path = ?').run(now, workspaceRoot);
   const ws = db.prepare('SELECT id FROM workspaces WHERE root_path = ?').get(workspaceRoot) as { id: number };
 
-  const snapId = (db.prepare('INSERT INTO snapshots (workspace_id, created_at) VALUES (?, ?)').run(ws.id, now)).lastInsertRowid;
+  const snapId = Number(db.prepare('INSERT INTO snapshots (workspace_id, created_at) VALUES (?, ?)').run(ws.id, now).lastInsertRowid);
 
   const pruneIds = (db.prepare(
     'SELECT id FROM snapshots WHERE workspace_id = ? ORDER BY created_at DESC LIMIT -1 OFFSET ?'
   ).all(ws.id, MAX_SNAPSHOTS) as { id: number }[]).map(r => r.id);
 
-  db.transaction(() => {
+  runTransaction(() => {
     const insNode = db!.prepare('INSERT INTO nodes (snapshot_id,symbol,file,line,kind) VALUES (?,?,?,?,?)');
     for (const n of graph.nodes.values()) insNode.run(snapId, n.symbol, n.file, n.line, n.kind);
 
@@ -113,7 +124,7 @@ export function saveGraph(workspaceRoot: string, graph: CodeGraph): void {
     if (pruneIds.length > 0) {
       db!.prepare(`DELETE FROM snapshots WHERE id IN (${pruneIds.join(',')})`).run();
     }
-  })();
+  });
 }
 
 export function loadGraph(workspaceRoot: string): CodeGraph | null {
@@ -177,7 +188,7 @@ export function searchNodes(
     WHERE ${conditions.join(' AND ')}
     ORDER BY rank
     LIMIT ?
-  `).all(...params) as { symbol: string; file: string; line: number; kind: string; workspaceRoot: string }[];
+  `).all(...params as Parameters<typeof db.prepare>) as { symbol: string; file: string; line: number; kind: string; workspaceRoot: string }[];
 }
 
 export function listWorkspaces(): { rootPath: string; lastIndexed: number; snapshotCount: number }[] {
