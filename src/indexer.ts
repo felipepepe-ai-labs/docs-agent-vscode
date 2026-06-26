@@ -8,7 +8,7 @@ export function buildGraph(workspaceRoot: string): CodeGraph {
     let content: string;
     try {
       content = fs.readFileSync(file, 'utf8');
-    } catch { continue; }
+    } catch (err) { console.warn('[Docs Agent] Cannot read file:', file, err); continue; }
     try {
       if (file.endsWith('.java')) parseJava(file, content, graph);
       else parseCSharp(file, content, graph);

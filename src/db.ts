@@ -86,7 +86,7 @@ function runTransaction(fn: () => void): void {
     fn();
     db!.exec('COMMIT');
   } catch (err) {
-    try { db!.exec('ROLLBACK'); } catch { /* ignore */ }
+    try { db!.exec('ROLLBACK'); } catch (rbErr) { console.error('[Docs Agent] ROLLBACK failed — DB may be inconsistent:', rbErr); }
     throw err;
   }
 }
@@ -96,10 +96,11 @@ export function saveGraph(workspaceRoot: string, graph: CodeGraph): void {
   const now = Date.now();
 
   db.prepare('INSERT OR IGNORE INTO workspaces (root_path) VALUES (?)').run(workspaceRoot);
-  db.prepare('UPDATE workspaces SET last_indexed = ? WHERE root_path = ?').run(now, workspaceRoot);
-  const ws = db.prepare('SELECT id FROM workspaces WHERE root_path = ?').get(workspaceRoot) as { id: number };
+  const ws = db.prepare('SELECT id FROM workspaces WHERE root_path = ?').get(workspaceRoot) as { id: number } | undefined;
+  if (!ws) throw new Error(`saveGraph: workspace row missing for "${workspaceRoot}" — DB may be corrupt`);
 
   runTransaction(() => {
+    db!.prepare('UPDATE workspaces SET last_indexed = ? WHERE root_path = ?').run(now, workspaceRoot);
     const snapId = Number(db!.prepare('INSERT INTO snapshots (workspace_id, created_at) VALUES (?, ?)').run(ws.id, now).lastInsertRowid);
 
     const insNode = db!.prepare('INSERT INTO nodes (snapshot_id,symbol,file,line,kind) VALUES (?,?,?,?,?)');

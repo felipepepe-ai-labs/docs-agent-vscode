@@ -33,7 +33,7 @@ function resolveDependencies(
     if (fs.existsSync(interfacePath)) {
       try {
         deps.push({ filePath: interfacePath, content: fs.readFileSync(interfacePath, 'utf8') });
-      } catch { /* unreadable dependency — skip */ }
+      } catch (err) { console.warn('[Docs Agent] Cannot read dependency:', interfacePath, err); }
     }
   }
 
@@ -49,20 +49,24 @@ function resolveDependencies(
     if (fs.existsSync(candidate) && candidate !== filePath && !deps.find(d => d.filePath === candidate)) {
       try {
         deps.push({ filePath: candidate, content: fs.readFileSync(candidate, 'utf8') });
-      } catch { /* unreadable dependency — skip */ }
+      } catch (err) { console.warn('[Docs Agent] Cannot read dependency:', candidate, err); }
     }
   }
 
   return deps;
 }
 
+function formatSection(filePath: string, content: string): string {
+  return `// FILE: ${filePath}\n<source_code>\n${content}\n</source_code>`;
+}
+
 export function formatContextBundle(ctx: FileContext): string {
   const sections: string[] = [];
 
-  sections.push(`// FILE: ${ctx.primary.filePath}\n${ctx.primary.content}`);
+  sections.push(formatSection(ctx.primary.filePath, ctx.primary.content));
 
   for (const dep of ctx.dependencies) {
-    sections.push(`// FILE: ${dep.filePath}\n${dep.content}`);
+    sections.push(formatSection(dep.filePath, dep.content));
   }
 
   return sections.join('\n\n// ---\n\n');

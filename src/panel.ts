@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { CodeGraph } from './graph';
 import { buildGraph } from './indexer';
@@ -67,19 +69,37 @@ export class GraphPanel {
   // ── Incoming messages from the webview ────────────────────────────────────
 
   private onMessage(msg: WebviewMessage): void {
-    switch (msg.type) {
-      case 'search':   this.sendSearchResults(msg.query);          break;
-      case 'expand':   this.sendSubgraph(msg.nodeId);             break;
-      case 'overview': this.sendOverviewGraph();                  break;
-      case 'reload':   this.reloadGraph();                        break;
-      case 'openFile': this.openFile(msg.file, msg.line).catch(err =>
-        vscode.window.showErrorMessage(`Docs Agent: Cannot open file — ${(err as Error).message}`)
-      ); break;
-      case 'query':    this.sendQueryResult(msg.kind, msg.target); break;
+    try {
+      switch (msg.type) {
+        case 'search':   this.sendSearchResults(msg.query);          break;
+        case 'expand':   this.sendSubgraph(msg.nodeId);             break;
+        case 'overview': this.sendOverviewGraph();                  break;
+        case 'reload':   this.reloadGraph();                        break;
+        case 'openFile': this.openFile(msg.file, msg.line).catch(err =>
+          vscode.window.showErrorMessage(`Docs Agent: Cannot open file — ${(err as Error).message}`)
+        ); break;
+        case 'query':    this.sendQueryResult(msg.kind, msg.target); break;
+      }
+    } catch (err) {
+      vscode.window.showErrorMessage(`Docs Agent: Graph error — ${(err as Error).message}`);
     }
   }
 
   private async openFile(file: string, line?: number): Promise<void> {
+    let realPath: string;
+    try {
+      realPath = fs.realpathSync(file);
+    } catch {
+      throw new Error(`Cannot resolve path: ${file}`);
+    }
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    const inWorkspace = folders.some(f => {
+      const root = f.uri.fsPath;
+      return realPath === root || realPath.startsWith(root + path.sep);
+    });
+    if (!inWorkspace) {
+      throw new Error(`File is outside the workspace: ${file}`);
+    }
     const doc = await vscode.workspace.openTextDocument(file);
     const selection = line !== undefined
       ? new vscode.Range(line - 1, 0, line - 1, 0)
