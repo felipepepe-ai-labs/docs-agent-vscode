@@ -7,9 +7,13 @@ export interface FileContext {
 }
 
 export function buildContext(activeFilePath: string, workspaceRoot: string): FileContext {
-  const primaryContent = fs.readFileSync(activeFilePath, 'utf8');
+  let primaryContent: string;
+  try {
+    primaryContent = fs.readFileSync(activeFilePath, 'utf8');
+  } catch (err) {
+    throw new Error(`Cannot read file "${activeFilePath}": ${(err as Error).message}`);
+  }
   const dependencies = resolveDependencies(activeFilePath, primaryContent, workspaceRoot);
-
   return { primary: { filePath: activeFilePath, content: primaryContent }, dependencies };
 }
 
@@ -27,7 +31,9 @@ function resolveDependencies(
     const interfaceName = fileName.replace(/Impl$/, '');
     const interfacePath = path.join(fileDir, `${interfaceName}.java`);
     if (fs.existsSync(interfacePath)) {
-      deps.push({ filePath: interfacePath, content: fs.readFileSync(interfacePath, 'utf8') });
+      try {
+        deps.push({ filePath: interfacePath, content: fs.readFileSync(interfacePath, 'utf8') });
+      } catch (err) { console.warn('[Docs Agent] Cannot read dependency:', interfacePath, err); }
     }
   }
 
@@ -41,20 +47,26 @@ function resolveDependencies(
     const candidate = path.join(workspaceRoot, 'src/main/java', relativePath);
 
     if (fs.existsSync(candidate) && candidate !== filePath && !deps.find(d => d.filePath === candidate)) {
-      deps.push({ filePath: candidate, content: fs.readFileSync(candidate, 'utf8') });
+      try {
+        deps.push({ filePath: candidate, content: fs.readFileSync(candidate, 'utf8') });
+      } catch (err) { console.warn('[Docs Agent] Cannot read dependency:', candidate, err); }
     }
   }
 
   return deps;
 }
 
+function formatSection(filePath: string, content: string): string {
+  return `// FILE: ${filePath}\n<source_code>\n${content}\n</source_code>`;
+}
+
 export function formatContextBundle(ctx: FileContext): string {
   const sections: string[] = [];
 
-  sections.push(`// FILE: ${ctx.primary.filePath}\n${ctx.primary.content}`);
+  sections.push(formatSection(ctx.primary.filePath, ctx.primary.content));
 
   for (const dep of ctx.dependencies) {
-    sections.push(`// FILE: ${dep.filePath}\n${dep.content}`);
+    sections.push(formatSection(dep.filePath, dep.content));
   }
 
   return sections.join('\n\n// ---\n\n');
