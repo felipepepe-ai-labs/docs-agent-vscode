@@ -3,9 +3,8 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { buildContext, formatContextBundle } from './context';
 import { DOC_TYPES } from './doctypes';
-import { CodeGraph, ImpactSummary } from './graph';
-import { initDb, loadGraph as loadGraphFromDb, saveGraph } from './db';
-import { buildGraph } from './indexer';
+import { CodeGraph, ImpactSummary, fromGraphifyJson } from './graph';
+import { findGraphify, graphOutPath, loadGraphJson, promptInstall, runGraphify, watchGraphJson } from './graphify-runner';
 import { chat, getLlmConfig } from './llm';
 import { GraphPanel } from './panel';
 import { buildProjectContext } from './project-context';
@@ -39,15 +38,11 @@ function loadPrimerFile(name: string): string {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-  initDb(context.globalStorageUri.fsPath);
-
-  // Load graph from DB cache for every workspace folder; merge into one CodeGraph.
   const folders = vscode.workspace.workspaceFolders ?? [];
-  if (folders.length > 0) {
-    setImmediate(() => {
-      codeGraph = mergeGraphs(folders.map(f => f.uri.fsPath));
-      console.log(`[Docs Agent] Graph ready — ${codeGraph.nodeCount} nodes, ${codeGraph.edgeCount} edges (${folders.length} folder(s))`);
-    });
+  const roots   = folders.map(f => f.uri.fsPath);
+
+  if (roots.length > 0) {
+    void initGraph(context, roots);
   }
 
   const command = vscode.commands.registerCommand('docsAgent.documentFile', async () => {
@@ -150,21 +145,25 @@ ${codeBundle}`;
       return;
     }
 
-    const editor = vscode.window.activeTextEditor;
-    const wordRange = editor?.document.getWordRangeAtPosition(editor.selection.active);
-    const wordUnderCursor = wordRange ? editor!.document.getText(wordRange) : '';
+    try {
+      const editor = vscode.window.activeTextEditor;
+      const wordRange = editor?.document.getWordRangeAtPosition(editor.selection.active);
+      const wordUnderCursor = wordRange ? editor!.document.getText(wordRange) : '';
 
-    const symbolName = await vscode.window.showInputBox({
-      value: wordUnderCursor,
-      prompt: 'Symbol to analyze — class name, method name, or ClassName.methodName',
-      placeHolder: 'e.g.  OrderService  or  OrderService.confirm',
-    });
-    if (!symbolName) return;
+      const symbolName = await vscode.window.showInputBox({
+        value: wordUnderCursor,
+        prompt: 'Symbol to analyze — class name, method name, or ClassName.methodName',
+        placeHolder: 'e.g.  OrderService  or  OrderService.confirm',
+      });
+      if (!symbolName) return;
 
-    const impact = codeGraph.queryImpact(symbolName);
-    const markdown = renderImpactDoc(symbolName, impact, codeGraph.nodeCount, codeGraph.edgeCount);
-    const doc = await vscode.workspace.openTextDocument({ content: markdown, language: 'markdown' });
-    await vscode.window.showTextDocument(doc, { preview: true });
+      const impact = codeGraph.queryImpact(symbolName);
+      const markdown = renderImpactDoc(symbolName, impact, codeGraph.nodeCount, codeGraph.edgeCount);
+      const doc = await vscode.workspace.openTextDocument({ content: markdown, language: 'markdown' });
+      await vscode.window.showTextDocument(doc, { preview: true });
+    } catch (err) {
+      vscode.window.showErrorMessage(`Docs Agent: ${(err as Error).message}`);
+    }
   });
 
   const settingsCommand = vscode.commands.registerCommand('docsAgent.openSettings', () => {
@@ -245,14 +244,16 @@ ${codeBundle}`;
               // README lives at workspace root; everything else goes flat into docsFolder
               const filename = path.basename(docType.outputPath);
               const relOut   = filename === 'README.md' ? filename : `${docsFolder}/${filename}`;
-              const absOut  = path.join(root, relOut);
+              const absOut   = path.resolve(root, relOut);
+              if (!absOut.startsWith(path.resolve(root) + path.sep) && absOut !== path.resolve(root)) {
+                throw new Error(`docsFolder setting points outside the workspace root: ${docsFolder}`);
+              }
               fs.mkdirSync(path.dirname(absOut), { recursive: true });
               fs.writeFileSync(absOut, normalizeMermaidBlocks(content), 'utf8');
               generated.push(relOut);
             } catch (err) {
-              const msg = (err as Error).message;
-              if (msg.includes('Cancelled') || msg.includes('cancel')) break;
-              vscode.window.showWarningMessage(`Docs Agent: Failed to generate "${docType.label}" — ${msg}`);
+              if (token.isCancellationRequested || err instanceof vscode.CancellationError) break;
+              vscode.window.showWarningMessage(`Docs Agent: Failed to generate "${docType.label}" — ${(err as Error).message}`);
             }
           }
 
@@ -326,23 +327,75 @@ function renderImpactDoc(symbol: string, impact: ImpactSummary, nodes: number, e
   return lines.join('\n');
 }
 
-// ── Workspace helpers ─────────────────────────────────────────────────────────
+// ── Graph helpers ─────────────────────────────────────────────────────────────
 
-// Merges graphs for one or more workspace roots into a single CodeGraph,
-// loading from the DB cache where available.
-function mergeGraphs(roots: string[]): CodeGraph {
+function mergeFromGraphify(roots: string[]): CodeGraph {
   const merged = new CodeGraph();
   for (const root of roots) {
-    const cached = loadGraphFromDb(root);
-    const g = cached ?? buildGraph(root);
-    if (!cached) saveGraph(root, g);
-    for (const node of g.nodes.values())   merged.addNode(node);
-    for (const e of g.callEdges)           merged.addCallEdge(e);
-    for (const e of g.tableEdges)          merged.addTableEdge(e);
-    for (const e of g.implementsEdges)     merged.addImplementsEdge(e);
-    for (const e of g.injectsEdges)        merged.addInjectsEdge(e);
+    const json = loadGraphJson(root);
+    if (!json) continue;
+    const g = fromGraphifyJson(json, root);
+    for (const node of g.nodes.values())    merged.addNode(node);
+    for (const e of g.callEdges)            merged.addCallEdge(e);
+    for (const e of g.tableEdges)           merged.addTableEdge(e);
+    for (const e of g.implementsEdges)      merged.addImplementsEdge(e);
+    for (const e of g.injectsEdges)         merged.addInjectsEdge(e);
   }
   return merged;
+}
+
+async function initGraph(ctx: vscode.ExtensionContext, roots: string[]): Promise<void> {
+  const bin = await findGraphify();
+  if (!bin) {
+    void promptInstall();
+    return;
+  }
+
+  // If graph.json already exists, load it immediately so the panel is usable
+  // before the (potentially slow) build completes.
+  if (roots.some(r => fs.existsSync(graphOutPath(r)))) {
+    try {
+      codeGraph = mergeFromGraphify(roots);
+      console.log(`[Docs Agent] Graph loaded — ${codeGraph.nodeCount} nodes (pre-existing)`);
+    } catch (err) {
+      console.error('[Docs Agent] Graph load failed:', err);
+    }
+  }
+
+  // Build / update graph in background, reporting progress in the status bar.
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Window, title: 'Docs Agent' },
+    async (progress) => {
+      for (const root of roots) {
+        const update = fs.existsSync(graphOutPath(root));
+        progress.report({ message: update ? 'Updating graph…' : 'Building graph…' });
+        try {
+          await runGraphify(root, update, progress);
+        } catch (err) {
+          console.error(`[Docs Agent] graphify failed for ${root}:`, err);
+          vscode.window.showWarningMessage(`Docs Agent: graphify failed — ${(err as Error).message}`);
+        }
+      }
+      try {
+        codeGraph = mergeFromGraphify(roots);
+        console.log(`[Docs Agent] Graph ready — ${codeGraph.nodeCount} nodes, ${codeGraph.edgeCount} edges`);
+      } catch (err) {
+        console.error('[Docs Agent] Graph reload failed:', err);
+      }
+    },
+  );
+
+  // Watch for future graphify runs (e.g. user runs `graphify update .` manually).
+  for (const root of roots) {
+    ctx.subscriptions.push(watchGraphJson(root, () => {
+      try {
+        codeGraph = mergeFromGraphify(roots);
+        console.log(`[Docs Agent] Graph refreshed — ${codeGraph!.nodeCount} nodes`);
+      } catch (err) {
+        console.error('[Docs Agent] Graph watch reload failed:', err);
+      }
+    }));
+  }
 }
 
 // Returns the single workspace root, or prompts the user to pick one when

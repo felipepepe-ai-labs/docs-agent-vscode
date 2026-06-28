@@ -1,7 +1,8 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
-import { CodeGraph } from './graph';
-import { buildGraph } from './indexer';
-import { saveGraph } from './db';
+import { CodeGraph, fromGraphifyJson } from './graph';
+import { loadGraphJson, runGraphify } from './graphify-runner';
 
 type WebviewMessage =
   | { type: 'search';   query: string  }
@@ -67,17 +68,37 @@ export class GraphPanel {
   // ── Incoming messages from the webview ────────────────────────────────────
 
   private onMessage(msg: WebviewMessage): void {
-    switch (msg.type) {
-      case 'search':   this.sendSearchResults(msg.query);          break;
-      case 'expand':   this.sendSubgraph(msg.nodeId);             break;
-      case 'overview': this.sendOverviewGraph();                  break;
-      case 'reload':   this.reloadGraph();                        break;
-      case 'openFile': this.openFile(msg.file, msg.line);         break;
-      case 'query':    this.sendQueryResult(msg.kind, msg.target); break;
+    try {
+      switch (msg.type) {
+        case 'search':   this.sendSearchResults(msg.query);          break;
+        case 'expand':   this.sendSubgraph(msg.nodeId);             break;
+        case 'overview': this.sendOverviewGraph();                  break;
+        case 'reload':   this.reloadGraph();                        break;
+        case 'openFile': this.openFile(msg.file, msg.line).catch(err =>
+          vscode.window.showErrorMessage(`Docs Agent: Cannot open file — ${(err as Error).message}`)
+        ); break;
+        case 'query':    this.sendQueryResult(msg.kind, msg.target); break;
+      }
+    } catch (err) {
+      vscode.window.showErrorMessage(`Docs Agent: Graph error — ${(err as Error).message}`);
     }
   }
 
   private async openFile(file: string, line?: number): Promise<void> {
+    let realPath: string;
+    try {
+      realPath = fs.realpathSync(file);
+    } catch {
+      throw new Error(`Cannot resolve path: ${file}`);
+    }
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    const inWorkspace = folders.some(f => {
+      const root = f.uri.fsPath;
+      return realPath === root || realPath.startsWith(root + path.sep);
+    });
+    if (!inWorkspace) {
+      throw new Error(`File is outside the workspace: ${file}`);
+    }
     const doc = await vscode.workspace.openTextDocument(file);
     const selection = line !== undefined
       ? new vscode.Range(line - 1, 0, line - 1, 0)
@@ -90,26 +111,32 @@ export class GraphPanel {
     if (folders.length === 0) return;
 
     this.panel.webview.postMessage({ type: 'reloading' });
-    setImmediate(() => {
-      const merged = new CodeGraph();
-      for (const folder of folders) {
-        const root = folder.uri.fsPath;
-        const g = buildGraph(root);
-        saveGraph(root, g);
-        for (const node of g.nodes.values())   merged.addNode(node);
-        for (const e of g.callEdges)           merged.addCallEdge(e);
-        for (const e of g.tableEdges)          merged.addTableEdge(e);
-        for (const e of g.implementsEdges)     merged.addImplementsEdge(e);
-        for (const e of g.injectsEdges)        merged.addInjectsEdge(e);
+    void (async () => {
+      try {
+        const merged = new CodeGraph();
+        for (const folder of folders) {
+          const root = folder.uri.fsPath;
+          await runGraphify(root, true);   // incremental update — AST-only, no LLM cost
+          const json = loadGraphJson(root);
+          if (!json) continue;
+          const g = fromGraphifyJson(json, root);
+          for (const node of g.nodes.values())    merged.addNode(node);
+          for (const e of g.callEdges)            merged.addCallEdge(e);
+          for (const e of g.tableEdges)           merged.addTableEdge(e);
+          for (const e of g.implementsEdges)      merged.addImplementsEdge(e);
+          for (const e of g.injectsEdges)         merged.addInjectsEdge(e);
+        }
+        this.graph = merged;
+        this.panel.webview.postMessage({
+          type:      'stats',
+          nodeCount: this.graph.nodeCount,
+          edgeCount: this.graph.edgeCount,
+        });
+        this.sendOverviewGraph();
+      } catch (err) {
+        vscode.window.showErrorMessage(`Docs Agent: Re-index failed — ${(err as Error).message}`);
       }
-      this.graph = merged;
-      this.panel.webview.postMessage({
-        type:      'stats',
-        nodeCount: this.graph.nodeCount,
-        edgeCount: this.graph.edgeCount,
-      });
-      this.sendOverviewGraph();
-    });
+    })();
   }
 
   private sendOverviewGraph(): void {
@@ -171,7 +198,7 @@ export class GraphPanel {
         return { id, label: id.slice(6), kind: 'table' };
       }
       const n = this.graph.nodes.get(id)!;
-      return { id, label: n.symbol.split('.').pop() ?? n.symbol, kind: n.kind, file: n.file, line: n.line };
+      return { id, label: n.label ?? n.symbol.split('.').pop() ?? n.symbol, kind: n.kind, file: n.file, line: n.line };
     });
 
     // Build edges between included nodes, resolving call callees via suffix map
@@ -217,11 +244,11 @@ export class GraphPanel {
   private sendSearchResults(query: string): void {
     const q = query.toLowerCase();
     const results = [...this.graph.nodes.values()]
-      .filter(n => n.symbol.toLowerCase().includes(q))
+      .filter(n => n.symbol.toLowerCase().includes(q) || (n.label ?? '').toLowerCase().includes(q))
       .slice(0, 20)
       .map(n => ({
         id:    n.symbol,
-        label: n.symbol.split('.').pop() ?? n.symbol,
+        label: n.label ?? n.symbol.split('.').pop() ?? n.symbol,
         kind:  n.kind,
         file:  n.file,
         line:  n.line,
@@ -452,8 +479,7 @@ export class GraphPanel {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function randomNonce(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  return Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  return crypto.randomUUID().replace(/-/g, '');
 }
 
 function dedupeEdges(edges: { source: string; target: string; label: string }[]) {

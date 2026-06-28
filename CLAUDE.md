@@ -41,15 +41,18 @@ User triggers command
 
 The extension's defining feature. Every LLM response is validated by `validateAndParse`: entries without both `file` (matching a `// FILE:` header in the prompt) and `line` (1-based integer) are silently rejected and counted. The prompt enforces this via `OUTPUT_SCHEMA_INSTRUCTION`. Do not relax these validation rules.
 
-### Code graph (`src/graph.ts`, `src/indexer.ts`)
+### Code graph (`src/graph.ts`, `src/graphify-runner.ts`)
 
-`buildGraph` walks the workspace and parses `.java` and `.cs` files using a **line-by-line regex + brace-depth state machine** (`ParseState`), not a real AST. It builds a `CodeGraph` with five edge types: `callEdges`, `tableEdges`, `implementsEdges`, `injectsEdges`, and nodes. The state machine assumes one class per file and does not handle nested classes.
+Graph extraction is delegated to the external **`graphify`** CLI (installable via `uv tool install graphify` or `pip install graphify`). On activation, `initGraph` in `extension.ts`:
+1. Checks for the `graphify` binary via `findGraphify()`; prompts installation if missing.
+2. Loads `graphify-out/graph.json` immediately if it already exists (fast startup).
+3. Runs `graphify .` (or `graphify update .` for incremental) as a subprocess with a VS Code status-bar progress indicator.
+4. Reloads `graph.json` into memory after the run completes.
+5. Registers a `fs.watch` on `graphify-out/` to pick up future manual runs.
 
-Graph is loaded eagerly on extension activation from the SQLite DB cache (`src/db.ts`). If no snapshot exists, it re-indexes and saves. Up to `MAX_SNAPSHOTS = 10` snapshots are retained per workspace; older ones are pruned in the same transaction.
+`graphify` outputs **NetworkX node-link JSON** (`graphify-out/graph.json`). `fromGraphifyJson` in `graph.ts` adapts this format into `CodeGraph`. Relation types handled: `calls`, `references` → `callEdge`; `implements` → `implementsEdge`; `uses`, `injects` → `injectsEdge`. Package-level relations (`imports`, `depends_on`, `contains`) are intentionally skipped.
 
-### SQLite persistence (`src/db.ts`)
-
-Uses `better-sqlite3` (synchronous, native addon). **Must remain external to the esbuild bundle** (`--external:better-sqlite3`). The DB lives in VS Code's `globalStorageUri`. An FTS5 virtual table with trigram tokenizer enables fuzzy symbol search via `searchNodes`. The `nodes_fts` table is kept in sync via `AFTER INSERT` / `AFTER DELETE` triggers.
+There is no SQLite layer. The graph is fully in-memory; `graph.json` is the only persistent artifact and lives in the workspace, not in VS Code's `globalStorageUri`.
 
 ### LLM providers (`src/llm.ts`, `src/ollama.ts`)
 
@@ -89,6 +92,6 @@ Add new primers by creating a `.md` file and extending `loadPrimer` in `extensio
 
 ## Key constraints
 
-- `better-sqlite3` is a native Node binary. It **must** be listed in `.vscodeignore` only via the exception pattern (`!node_modules/better-sqlite3/**`) and excluded from esbuild with `--external:better-sqlite3`. Never bundle it.
-- The webview CSP allows no inline scripts — only nonce-protected external scripts from `localResourceRoots`. Do not add `'unsafe-inline'` to the policy.
+- `graphify` is an **external runtime dependency** — the extension cannot build the graph if it is not installed. `promptInstall()` shows a warning with install options, but does not verify success.
+- The webview CSP allows no inline scripts — only nonce-protected external scripts from `localResourceRoots`. Do not add `'unsafe-inline'` to the policy. Nonces must be generated with `crypto.randomUUID()`, never `Math.random()`.
 - `context.ts` import resolution is hardcoded to `com.example.*` and `src/main/java`. Update both constants if the target Java package changes.
