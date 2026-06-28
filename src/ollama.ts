@@ -18,6 +18,30 @@ export function getOllamaConfig(): OllamaConfig {
   };
 }
 
+function resolveIpv4Mapped(hostname: string): string {
+  const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(hostname);
+  if (dotted) return dotted[1];
+  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(hostname);
+  if (hex) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+  }
+  return hostname;
+}
+
+export function assertSafeUrl(url: string): void {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { throw new Error(`Invalid Ollama URL: ${url}`); }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error(`Ollama URL must use http or https. Got: ${parsed.protocol}`);
+  }
+  const hostname = resolveIpv4Mapped(parsed.hostname.toLowerCase().replace(/^\[|\]$/g, ''));
+  if (hostname.startsWith('169.254.') || hostname === 'fd00:ec2::254') {
+    throw new Error('Ollama URL must not target cloud metadata endpoints.');
+  }
+}
+
 export interface OllamaResult {
   content:          string;
   promptTokens:     number;
@@ -54,26 +78,30 @@ export async function chat(messages: OllamaMessage[], config: OllamaConfig): Pro
   const decoder = new TextDecoder();
   let promptTokens     = 0;
   let completionTokens = 0;
+  let leftover         = '';
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    const text = decoder.decode(value, { stream: true });
-    for (const line of text.split('\n')) {
+    leftover += decoder.decode(value, { stream: true });
+    const lines = leftover.split('\n');
+    leftover = lines.pop() ?? '';
+
+    for (const line of lines) {
       if (!line.trim()) continue;
       try {
-        const parsed = JSON.parse(line);
-        if (parsed.message?.content) {
-          chunks.push(parsed.message.content);
+        const parsed = JSON.parse(line) as Record<string, unknown>;
+        const msg = parsed['message'] as Record<string, unknown> | undefined;
+        if (typeof msg?.['content'] === 'string') {
+          chunks.push(msg['content']);
         }
-        // Final chunk (done: true) carries token counts.
-        if (parsed.done === true) {
-          promptTokens     = parsed.prompt_eval_count ?? 0;
-          completionTokens = parsed.eval_count        ?? 0;
+        if (parsed['done'] === true) {
+          promptTokens     = (parsed['prompt_eval_count'] as number) ?? 0;
+          completionTokens = (parsed['eval_count']        as number) ?? 0;
         }
       } catch {
-        // incomplete JSON chunk — skip
+        // malformed line — skip
       }
     }
   }
