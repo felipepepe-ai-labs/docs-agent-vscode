@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { assertSafeUrl } from './ollama';
 
 interface OllamaModel { name: string }
 
@@ -53,13 +54,18 @@ export class SettingsPanel {
 
   // ── Messages ─────────────────────────────────────────────────────────────────
 
-  private async onMessage(msg: { type: string; [k: string]: unknown }): Promise<void> {
-    switch (msg.type) {
-      case 'save':              await this.save(msg['settings'] as Record<string, string>); break;
-      case 'testOllama':        await this.testOllama(msg['url'] as string);                break;
-      case 'refreshOllama':     await this.fetchOllamaModels(msg['url'] as string);         break;
-      case 'listVsCodeModels':  await this.listVsCodeModels();                              break;
-    }
+  private onMessage(msg: { type: string; [k: string]: unknown }): void {
+    const handler = async (): Promise<void> => {
+      switch (msg.type) {
+        case 'save':              await this.save(msg['settings'] as Record<string, string>); break;
+        case 'testOllama':        await this.testOllama(msg['url'] as string);                break;
+        case 'refreshOllama':     await this.fetchOllamaModels(msg['url'] as string);         break;
+        case 'listVsCodeModels':  await this.listVsCodeModels();                              break;
+      }
+    };
+    handler().catch(err => {
+      vscode.window.showErrorMessage(`Docs Agent Settings: ${(err as Error).message}`);
+    });
   }
 
   private async save(settings: Record<string, string>): Promise<void> {
@@ -75,6 +81,7 @@ export class SettingsPanel {
 
   private async testOllama(url: string): Promise<void> {
     try {
+      assertSafeUrl(url);
       const resp = await fetch(`${url}/api/version`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json() as { version?: string };
@@ -86,6 +93,7 @@ export class SettingsPanel {
 
   private async fetchOllamaModels(url: string): Promise<void> {
     try {
+      assertSafeUrl(url);
       const resp = await fetch(`${url}/api/tags`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json() as { models?: OllamaModel[] };
@@ -223,6 +231,5 @@ export class SettingsPanel {
 }
 
 function randomNonce(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  return Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  return crypto.randomUUID().replace(/-/g, '');
 }
