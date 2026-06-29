@@ -104,7 +104,9 @@
     "copy-native": "node scripts/copy-native.js",
     "watch:ext": "pnpm run build:ext -- --watch",
     "watch:webview": "pnpm run build:webview -- --watch",
-    "package": "pnpm run build && pnpm run copy-native && vsce package --no-dependencies --allow-missing-repository"
+    "package": "pnpm run build && pnpm run copy-native && vsce package --no-dependencies --allow-missing-repository",
+    "install:ext": "bash scripts/install.sh",
+    "install:ext:win": "powershell -ExecutionPolicy Bypass -File scripts\\install.ps1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
