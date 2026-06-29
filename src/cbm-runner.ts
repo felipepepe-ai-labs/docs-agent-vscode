@@ -12,6 +12,30 @@ export interface CbmNode {
   degree?:        number;
 }
 
+export interface CbmLayoutNode {
+  id:        number;
+  x:         number;
+  y:         number;
+  z:         number;
+  label:     string;
+  name:      string;
+  file_path: string;
+  size:      number;
+  color:     string;
+}
+
+export interface CbmLayoutEdge {
+  source: number;
+  target: number;
+  type:   string;
+}
+
+export interface CbmLayoutResult {
+  nodes:       CbmLayoutNode[];
+  edges:       CbmLayoutEdge[];
+  total_nodes: number;
+}
+
 export interface CbmSearchResult {
   results:          CbmNode[];
   semantic_results?: CbmNode[];
@@ -27,9 +51,9 @@ export interface CbmQueryResult {
 // ── Manager ────────────────────────────────────────────────────────────────────
 
 export class CbmManager {
-  private readonly client:   McpClient;
-  readonly project:          string;
-  private readonly repoPath: string;
+  private readonly client:  McpClient;
+  readonly project:         string;
+  readonly repoPath:        string;
 
   constructor(client: McpClient, workspaceRoot: string) {
     this.client   = client;
@@ -90,6 +114,11 @@ export class CbmManager {
       max_rows: maxRows,
     });
     return JSON.parse(raw) as CbmQueryResult;
+  }
+
+  async fetchLayout(maxNodes = 300): Promise<CbmLayoutResult> {
+    const raw = await this.client.getLayout(this.project, maxNodes);
+    return raw as CbmLayoutResult;
   }
 
   async detectChanges(since?: string): Promise<string> {

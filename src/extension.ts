@@ -155,7 +155,9 @@ ${codeBundle}`;
       vscode.window.showWarningMessage('Docs Agent: Graph is still building. Try again in a moment.');
       return;
     }
-    GraphPanel.createOrShow(context, codeGraph);
+    // Pass the CBM manager for the first workspace root, if available
+    const cbm = roots.length > 0 ? cbmManagers.get(roots[0]) : undefined;
+    GraphPanel.createOrShow(context, codeGraph, cbm);
   });
 
   const analyzeCommand = vscode.commands.registerCommand('docsAgent.analyzeImpact', async () => {

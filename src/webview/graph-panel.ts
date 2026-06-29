@@ -11,6 +11,9 @@ interface GraphNode {
   kind: string;
   file?: string;
   line?: number;
+  x?: number;
+  y?: number;
+  z?: number;
 }
 
 interface GraphEdge {
@@ -27,7 +30,7 @@ interface SimNode extends GraphNode {
 type InboundMsg =
   | { type: 'stats';         nodeCount: number; edgeCount: number }
   | { type: 'searchResults'; results: GraphNode[] }
-  | { type: 'subgraph';      centerId: string; nodes: GraphNode[]; edges: GraphEdge[] }
+  | { type: 'subgraph';      centerId: string; nodes: GraphNode[]; edges: GraphEdge[]; precomputed?: boolean }
   | { type: 'reloading' }
   | { type: 'queryAnswer';   question: string; lines: string[] };
 
@@ -349,9 +352,9 @@ function loadSubgraph(msg: Extract<InboundMsg, { type: 'subgraph' }>): void {
   const scatter = centerId === '' ? 900 : 380;
   simNodes = msg.nodes.map(n => ({
     ...n,
-    x:  n.id === centerId ? 0 : (Math.random() - 0.5) * scatter,
-    y:  n.id === centerId ? 0 : (Math.random() - 0.5) * scatter,
-    z:  n.id === centerId ? 0 : (Math.random() - 0.5) * scatter,
+    x:  n.x ?? (n.id === centerId ? 0 : (Math.random() - 0.5) * scatter),
+    y:  n.y ?? (n.id === centerId ? 0 : (Math.random() - 0.5) * scatter),
+    z:  n.z ?? (n.id === centerId ? 0 : (Math.random() - 0.5) * scatter),
     vx: 0, vy: 0, vz: 0,
   }));
   edges   = msg.edges;
@@ -367,7 +370,8 @@ function loadSubgraph(msg: Extract<InboundMsg, { type: 'subgraph' }>): void {
   sph.radius = centerId === '' ? 1800 : 700;
   syncCamera();
 
-  simActive = true;
+  // Skip client-side simulation when CBM provides server-computed positions
+  simActive = !msg.precomputed;
   stableFor = 0;
   showDetail(null);
 }

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { CbmManager } from './cbm-runner';
 import { CodeGraph, fromGraphifyJson } from './graph';
 import { loadGraphJson, runGraphify } from './graphify-runner';
 
@@ -15,20 +16,26 @@ type WebviewMessage =
 export class GraphPanel {
   private static instance: GraphPanel | undefined;
 
-  private readonly panel: vscode.WebviewPanel;
-  private graph: CodeGraph;
+  private readonly panel:         vscode.WebviewPanel;
+  private graph:                  CodeGraph;
+  private readonly cbm?:          CbmManager;
+  private readonly workspaceRoot: string;
+  // name → {kind, file (relative)} for expand lookups when using CBM layout
+  private cbmNodeData = new Map<string, { kind: string; file: string }>();
   private readonly disposables: vscode.Disposable[] = [];
 
-  static createOrShow(ctx: vscode.ExtensionContext, graph: CodeGraph): void {
+  static createOrShow(ctx: vscode.ExtensionContext, graph: CodeGraph, cbm?: CbmManager): void {
     if (GraphPanel.instance) {
       GraphPanel.instance.panel.reveal(vscode.ViewColumn.One);
       return;
     }
-    GraphPanel.instance = new GraphPanel(ctx, graph);
+    GraphPanel.instance = new GraphPanel(ctx, graph, cbm);
   }
 
-  private constructor(ctx: vscode.ExtensionContext, graph: CodeGraph) {
-    this.graph = graph;
+  private constructor(ctx: vscode.ExtensionContext, graph: CodeGraph, cbm?: CbmManager) {
+    this.graph         = graph;
+    this.cbm           = cbm;
+    this.workspaceRoot = cbm?.repoPath ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
     this.panel = vscode.window.createWebviewPanel(
       'docsAgentGraph',
@@ -107,6 +114,14 @@ export class GraphPanel {
   }
 
   private reloadGraph(): void {
+    if (this.cbm) {
+      this.panel.webview.postMessage({ type: 'reloading' });
+      void this.cbm.reindex('moderate').then(() => this.sendOverviewGraph()).catch(err =>
+        vscode.window.showErrorMessage(`Docs Agent: CBM re-index failed — ${(err as Error).message}`)
+      );
+      return;
+    }
+
     const folders = vscode.workspace.workspaceFolders ?? [];
     if (folders.length === 0) return;
 
@@ -116,7 +131,7 @@ export class GraphPanel {
         const merged = new CodeGraph();
         for (const folder of folders) {
           const root = folder.uri.fsPath;
-          await runGraphify(root, true);   // incremental update — AST-only, no LLM cost
+          await runGraphify(root, true);
           const json = loadGraphJson(root);
           if (!json) continue;
           const g = fromGraphifyJson(json, root);
@@ -140,6 +155,73 @@ export class GraphPanel {
   }
 
   private sendOverviewGraph(): void {
+    if (this.cbm) {
+      void this.sendOverviewGraphCbm();
+      return;
+    }
+    this.sendOverviewGraphLocal();
+  }
+
+  private async sendOverviewGraphCbm(): Promise<void> {
+    try {
+      const result = await this.cbm!.fetchLayout(300);
+
+      // Normalize all coordinates into ±900 world units
+      let maxCoord = 1;
+      for (const n of result.nodes) {
+        if (isFinite(n.x)) maxCoord = Math.max(maxCoord, Math.abs(n.x));
+        if (isFinite(n.y)) maxCoord = Math.max(maxCoord, Math.abs(n.y));
+        if (isFinite(n.z)) maxCoord = Math.max(maxCoord, Math.abs(n.z));
+      }
+      const scale = 900 / maxCoord;
+
+      // Cache node data (name → meta) for expand lookups
+      this.cbmNodeData.clear();
+      const idToName = new Map<number, string>();
+      for (const n of result.nodes) {
+        idToName.set(n.id, n.name);
+        this.cbmNodeData.set(n.name, { kind: _cbmLabelToKind(n.label), file: n.file_path ?? '' });
+      }
+
+      const nameSet = new Set<string>();
+      const nodes = result.nodes.map(n => {
+        nameSet.add(n.name);
+        return {
+          id:    n.name,
+          label: n.name,
+          kind:  _cbmLabelToKind(n.label),
+          file:  n.file_path ? path.join(this.workspaceRoot, n.file_path) : undefined,
+          x:     isFinite(n.x) ? n.x * scale : 0,
+          y:     isFinite(n.y) ? n.y * scale : 0,
+          z:     isFinite(n.z) ? n.z * scale : 0,
+        };
+      });
+
+      const edges = result.edges.flatMap(e => {
+        const src = idToName.get(e.source);
+        const tgt = idToName.get(e.target);
+        if (!src || !tgt || !nameSet.has(src) || !nameSet.has(tgt)) return [];
+        return [{ source: src, target: tgt, label: e.type.toLowerCase() }];
+      });
+
+      this.panel.webview.postMessage({
+        type:      'stats',
+        nodeCount: result.total_nodes,
+        edgeCount: result.edges.length,
+      });
+      this.panel.webview.postMessage({
+        type:        'subgraph',
+        centerId:    '',
+        nodes,
+        edges:       dedupeEdges(edges),
+        precomputed: true,
+      });
+    } catch (err) {
+      vscode.window.showErrorMessage(`Docs Agent: CBM layout failed — ${(err as Error).message}`);
+    }
+  }
+
+  private sendOverviewGraphLocal(): void {
     const MAX_NODES = 120;
     const MAX_EDGES = 400;
 
@@ -242,6 +324,10 @@ export class GraphPanel {
   }
 
   private sendSearchResults(query: string): void {
+    if (this.cbm) {
+      void this.sendSearchResultsCbm(query);
+      return;
+    }
     const q = query.toLowerCase();
     const results = [...this.graph.nodes.values()]
       .filter(n => n.symbol.toLowerCase().includes(q) || (n.label ?? '').toLowerCase().includes(q))
@@ -257,7 +343,27 @@ export class GraphPanel {
     this.panel.webview.postMessage({ type: 'searchResults', results });
   }
 
+  private async sendSearchResultsCbm(query: string): Promise<void> {
+    try {
+      const page = await this.cbm!.searchGraph({ query, limit: 20 });
+      const results = page.results.map(n => ({
+        id:    n.name ?? n.qualified_name,
+        label: n.name ?? (n.qualified_name.split('.').pop() ?? n.qualified_name),
+        kind:  _cbmLabelToKind(n.label),
+        file:  n.file,
+        line:  n.line,
+      }));
+      this.panel.webview.postMessage({ type: 'searchResults', results });
+    } catch (err) {
+      console.warn('[Docs Agent] CBM search failed:', err);
+    }
+  }
+
   private sendSubgraph(nodeId: string): void {
+    if (this.cbm) {
+      void this.sendSubgraphCbm(nodeId);
+      return;
+    }
     const impact = this.graph.queryImpact(nodeId);
     const center = this.graph.nodes.get(nodeId);
 
@@ -308,6 +414,71 @@ export class GraphPanel {
       return n
         ? { id, label: n.symbol.split('.').pop() ?? n.symbol, kind: n.kind, file: n.file, line: n.line }
         : { id, label: id.split('.').pop() ?? id, kind: 'unknown' };
+    });
+
+    this.panel.webview.postMessage({
+      type:     'subgraph',
+      centerId: nodeId,
+      nodes:    nodeList,
+      edges:    dedupeEdges(edgeList),
+    });
+  }
+
+  private async sendSubgraphCbm(nodeId: string): Promise<void> {
+    // nodeId is the node's display name (set during overview from CBM layout)
+    const safe     = nodeId.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const nodeSet  = new Set<string>([nodeId]);
+    const edgeList: { source: string; target: string; label: string }[] = [];
+    const nodeData = new Map<string, { kind: string; file?: string; line?: number }>();
+
+    const cached = this.cbmNodeData.get(nodeId);
+    if (cached) {
+      nodeData.set(nodeId, {
+        kind: cached.kind,
+        file: cached.file ? path.join(this.workspaceRoot, cached.file) : undefined,
+      });
+    }
+
+    const addNeighbor = (
+      r: { name?: string; label?: string; file?: string; line?: number },
+      src: string,
+      tgt: string,
+    ) => {
+      if (!r.name) return;
+      nodeSet.add(r.name);
+      edgeList.push({ source: src, target: tgt, label: 'calls' });
+      if (!nodeData.has(r.name)) {
+        nodeData.set(r.name, {
+          kind: _cbmLabelToKind(r.label ?? ''),
+          file: r.file,
+          line: r.line,
+        });
+      }
+    };
+
+    try {
+      const { rows: outRows } = await this.cbm!.queryGraph(
+        `MATCH (n {name: '${safe}'})-[:CALLS]->(m) WHERE m.file IS NOT NULL ` +
+        `RETURN m.name AS name, m.label AS label, m.file AS file, m.line AS line LIMIT 15`,
+      );
+      for (const r of outRows as { name?: string; label?: string; file?: string; line?: number }[]) {
+        addNeighbor(r, nodeId, r.name!);
+      }
+
+      const { rows: inRows } = await this.cbm!.queryGraph(
+        `MATCH (m)-[:CALLS]->(n {name: '${safe}'}) WHERE m.file IS NOT NULL ` +
+        `RETURN m.name AS name, m.label AS label, m.file AS file, m.line AS line LIMIT 15`,
+      );
+      for (const r of inRows as { name?: string; label?: string; file?: string; line?: number }[]) {
+        addNeighbor(r, r.name!, nodeId);
+      }
+    } catch (err) {
+      console.warn('[Docs Agent] CBM expand query failed:', err);
+    }
+
+    const nodeList = [...nodeSet].map(id => {
+      const d = nodeData.get(id);
+      return { id, label: id, kind: d?.kind ?? 'method', file: d?.file, line: d?.line };
     });
 
     this.panel.webview.postMessage({
@@ -477,6 +648,17 @@ export class GraphPanel {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function _cbmLabelToKind(label: string): string {
+  switch (label) {
+    case 'Class':       return 'class';
+    case 'Interface':   return 'interface';
+    case 'Method':      return 'method';
+    case 'Constructor': return 'constructor';
+    case 'Field':       return 'field';
+    default:            return 'method';
+  }
+}
 
 function randomNonce(): string {
   return crypto.randomUUID().replace(/-/g, '');

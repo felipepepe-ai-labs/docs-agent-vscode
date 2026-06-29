@@ -23,11 +23,13 @@ export class McpClient {
   private nextId = 1;
   readonly rpcUrl: string;
   readonly statusUrl: string;
+  readonly layoutBaseUrl: string;
 
   constructor(port: number = 9749) {
-    const base    = `http://localhost:${port}`;
-    this.rpcUrl   = `${base}/rpc`;
-    this.statusUrl = `${base}/api/index-status`;
+    const base         = `http://localhost:${port}`;
+    this.rpcUrl        = `${base}/rpc`;
+    this.statusUrl     = `${base}/api/index-status`;
+    this.layoutBaseUrl = `${base}/api/layout`;
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<string> {
@@ -65,6 +67,21 @@ export class McpClient {
       );
     }
     return (result?.content ?? []).map(c => c.text ?? '').join('');
+  }
+
+  async getLayout(project: string, maxNodes = 300): Promise<unknown> {
+    const url = `${this.layoutBaseUrl}?project=${encodeURIComponent(project)}&max_nodes=${maxNodes}`;
+    let response: Response;
+    try {
+      const ac    = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 10000);
+      response    = await fetch(url, { signal: ac.signal });
+      clearTimeout(timer);
+    } catch (err) {
+      throw new Error(`Cannot reach CBM layout at ${url}: ${(err as Error).message}`);
+    }
+    if (!response.ok) throw new Error(`CBM layout HTTP ${response.status}: ${await response.text()}`);
+    return response.json();
   }
 
   async ping(): Promise<boolean> {
