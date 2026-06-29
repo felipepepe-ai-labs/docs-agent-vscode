@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import type { CbmManager } from './cbm-runner';
 
 export interface FileContext {
   primary: { filePath: string; content: string };
@@ -7,14 +8,31 @@ export interface FileContext {
 }
 
 export function buildContext(activeFilePath: string, workspaceRoot: string): FileContext {
+  let realPath: string;
+  try {
+    realPath = fs.realpathSync(activeFilePath);
+  } catch (err) {
+    throw new Error(`Cannot resolve path "${activeFilePath}": ${(err as Error).message}`);
+  }
+  const sep = path.sep;
+  if (realPath !== workspaceRoot && !realPath.startsWith(workspaceRoot + sep)) {
+    throw new Error(`File resolves outside the workspace: ${activeFilePath}`);
+  }
+
   let primaryContent: string;
   try {
-    primaryContent = fs.readFileSync(activeFilePath, 'utf8');
+    primaryContent = fs.readFileSync(realPath, 'utf8');
   } catch (err) {
     throw new Error(`Cannot read file "${activeFilePath}": ${(err as Error).message}`);
   }
   const dependencies = resolveDependencies(activeFilePath, primaryContent, workspaceRoot);
   return { primary: { filePath: activeFilePath, content: primaryContent }, dependencies };
+}
+
+export function buildContextFiles(ctx: FileContext): Set<string> {
+  const files = new Set<string>([ctx.primary.filePath]);
+  for (const dep of ctx.dependencies) files.add(dep.filePath);
+  return files;
 }
 
 function resolveDependencies(
@@ -57,7 +75,58 @@ function resolveDependencies(
 }
 
 function formatSection(filePath: string, content: string): string {
-  return `// FILE: ${filePath}\n<source_code>\n${content}\n</source_code>`;
+  // Escape closing tags so injected content cannot break out of the source_code boundary
+  const safe = content.replace(/<\/source_code>/gi, '<\\/source_code>');
+  return `// FILE: ${filePath}\n<source_code>\n${safe}\n</source_code>`;
+}
+
+// Enriched context using codebase-memory-mcp:
+// - Queries the call graph for outbound dependencies of the active file
+// - Fetches precise symbol snippets instead of reading whole files
+// - Falls back to base buildContext for files not yet in the graph
+export async function buildContextWithCbm(
+  activeFilePath: string,
+  workspaceRoot:  string,
+  cbm:            CbmManager,
+): Promise<FileContext> {
+  const base = buildContext(activeFilePath, workspaceRoot);
+
+  // Cypher: find symbols in other files that callers in activeFilePath call
+  const safePath = activeFilePath.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  let depQns: { qn: string; file: string }[] = [];
+  try {
+    const { rows } = await cbm.queryGraph(
+      `MATCH (caller)-[:CALLS]->(callee) ` +
+      `WHERE caller.file = '${safePath}' ` +
+      `AND callee.file IS NOT NULL AND callee.file <> '${safePath}' ` +
+      `RETURN DISTINCT callee.qualified_name AS qn, callee.file AS file LIMIT 15`,
+    );
+    depQns = rows as { qn: string; file: string }[];
+  } catch { /* graph not ready or query unsupported — use base context */ }
+
+  const seen = new Set<string>([
+    activeFilePath,
+    ...base.dependencies.map(d => d.filePath),
+  ]);
+  const extraDeps: { filePath: string; content: string }[] = [];
+
+  for (const { qn, file } of depQns) {
+    if (!file || !qn || seen.has(file)) continue;
+    // Strict workspace containment — never fetch files outside the root
+    if (!file.startsWith(workspaceRoot + path.sep) && file !== workspaceRoot) continue;
+    try {
+      const snippet = await cbm.getCodeSnippet(qn);
+      if (snippet) {
+        extraDeps.push({ filePath: file, content: snippet });
+        seen.add(file);
+      }
+    } catch { /* symbol not indexed or ambiguous — skip */ }
+  }
+
+  return {
+    primary:      base.primary,
+    dependencies: [...base.dependencies, ...extraDeps],
+  };
 }
 
 export function formatContextBundle(ctx: FileContext): string {

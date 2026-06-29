@@ -1,11 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { buildContext, formatContextBundle } from './context';
+import { buildContext, buildContextFiles, buildContextWithCbm, formatContextBundle } from './context';
+import { CbmManager, findCbm, startCbm } from './cbm-runner';
 import { DOC_TYPES } from './doctypes';
 import { DashboardPanel } from './dashboard-panel';
 import { CodeGraph, ImpactSummary, fromGraphifyJson } from './graph';
-import { findGraphify, graphOutPath, loadGraphJson, promptInstall, runGraphify, watchGraphJson } from './graphify-runner';
+import { findGraphify, graphOutPath, loadGraphJson, promptInstall, runGraphify, setCachedBin, watchGraphJson } from './graphify-runner';
+import { fromCbmQuery } from './graph';
 import { chat, getLlmConfig, setActiveCommand } from './llm';
 import { GraphPanel } from './panel';
 import { buildProjectContext } from './project-context';
@@ -15,6 +17,9 @@ import { normalizeMermaidBlocks, openDoc, writeDoc } from './writer';
 
 const PRIMERS_DIR = path.join(__dirname, '..', 'src', 'primers');
 let codeGraph: CodeGraph | null = null;
+// One CbmManager per workspace root, keyed by fsPath.
+// Empty when codebase-memory-mcp is not installed — extension degrades to graphify.
+const cbmManagers = new Map<string, CbmManager>();
 
 function languageInstruction(language: string): string {
   if (language === 'spanish') {
@@ -23,10 +28,18 @@ function languageInstruction(language: string): string {
   return '';
 }
 
-function loadPrimer(filePath: string): string {
-  if (filePath.endsWith('.java'))                                          return loadPrimerFile('springboot.md');
-  if (filePath.endsWith('.cs'))                                            return loadPrimerFile('webforms.md');
-  if (filePath.endsWith('.ts') && !filePath.endsWith('.spec.ts'))          return loadPrimerFile('angular.md');
+function loadPrimer(filePath: string, workspaceRoot: string): string {
+  if (filePath.endsWith('.java'))  return loadPrimerFile('springboot.md');
+  if (filePath.endsWith('.cs'))    return loadPrimerFile('webforms.md');
+  if (filePath.endsWith('.ts') && !filePath.endsWith('.spec.ts')) {
+    const pkgPath = path.join(workspaceRoot, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = fs.readFileSync(pkgPath, 'utf8');
+        if (pkg.includes('"@angular/core"')) return loadPrimerFile('angular.md');
+      } catch { /* ignore */ }
+    }
+  }
   return '';
 }
 
@@ -69,11 +82,15 @@ export function activate(context: vscode.ExtensionContext) {
       async (progress) => {
         try {
           progress.report({ message: 'Reading file and dependencies...' });
-          const ctx = buildContext(filePath, workspaceRoot);
+          const cbm = cbmManagers.get(workspaceRoot);
+          const ctx = cbm
+            ? await buildContextWithCbm(filePath, workspaceRoot, cbm)
+            : buildContext(filePath, workspaceRoot);
+          const contextFiles = buildContextFiles(ctx);
           const codeBundle = formatContextBundle(ctx);
 
           progress.report({ message: 'Loading architectural primer...' });
-          const primer = loadPrimer(filePath);
+          const primer = loadPrimer(filePath, workspaceRoot);
 
           const systemPrompt = [primer, OUTPUT_SCHEMA_INSTRUCTION].filter(Boolean).join('\n\n---\n\n');
 
@@ -99,7 +116,7 @@ ${codeBundle}`;
           );
 
           progress.report({ message: 'Validating citations...' });
-          const result = validateAndParse(raw);
+          const result = validateAndParse(raw, contextFiles);
 
           if (result.valid.length === 0 && result.rejected.length > 0) {
             vscode.window.showErrorMessage(
@@ -219,6 +236,18 @@ ${codeBundle}`;
           const language   = cfg.get<string>('language', 'english');
           const langNote   = languageInstruction(language);
 
+          // Fetch architecture overview once and inject into every doc type prompt
+          let architectureContext = '';
+          const cbmForRoot = cbmManagers.get(root);
+          if (cbmForRoot) {
+            try {
+              progress.report({ message: 'Fetching architecture overview…', increment: 0 });
+              architectureContext = await cbmForRoot.getArchitecture();
+            } catch (err) {
+              console.warn('[Docs Agent] Architecture fetch failed:', err);
+            }
+          }
+
           const increment = 90 / chosenTypes.length;
           const generated: string[] = [];
 
@@ -233,7 +262,10 @@ ${codeBundle}`;
 
             try {
               const { system, user } = docType.prompt(ctx);
-              const systemWithLang = langNote ? `${system}\n\n---\n\n${langNote}` : system;
+              const systemWithArch = architectureContext
+                ? `${system}\n\n---\n## Code Graph Architecture Analysis\n\n${architectureContext}`
+                : system;
+              const systemWithLang = langNote ? `${systemWithArch}\n\n---\n\n${langNote}` : systemWithArch;
               setActiveCommand('documentProject');
               const content = await chat(
                 [
@@ -356,14 +388,21 @@ function mergeFromGraphify(roots: string[]): CodeGraph {
 }
 
 async function initGraph(ctx: vscode.ExtensionContext, roots: string[]): Promise<void> {
+  // ── Primary path: codebase-memory-mcp ────────────────────────────────────────
+  const cbmBin = await findCbm();
+  if (cbmBin) {
+    await initCbm(ctx, roots, cbmBin);
+    return;
+  }
+
+  // ── Fallback path: graphify ───────────────────────────────────────────────────
   const bin = await findGraphify();
   if (!bin) {
     void promptInstall();
     return;
   }
+  setCachedBin(bin);
 
-  // If graph.json already exists, load it immediately so the panel is usable
-  // before the (potentially slow) build completes.
   if (roots.some(r => fs.existsSync(graphOutPath(r)))) {
     try {
       codeGraph = mergeFromGraphify(roots);
@@ -373,7 +412,6 @@ async function initGraph(ctx: vscode.ExtensionContext, roots: string[]): Promise
     }
   }
 
-  // Build / update graph in background, reporting progress in the status bar.
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Window, title: 'Docs Agent' },
     async (progress) => {
@@ -397,7 +435,6 @@ async function initGraph(ctx: vscode.ExtensionContext, roots: string[]): Promise
     },
   );
 
-  // Watch for future graphify runs (e.g. user runs `graphify update .` manually).
   for (const root of roots) {
     ctx.subscriptions.push(watchGraphJson(root, () => {
       try {
@@ -408,6 +445,43 @@ async function initGraph(ctx: vscode.ExtensionContext, roots: string[]): Promise
         console.error('[Docs Agent] Graph watch reload failed:', err);
       }
     }));
+  }
+}
+
+async function initCbm(ctx: vscode.ExtensionContext, roots: string[], bin: string): Promise<void> {
+  for (const root of roots) {
+    let mgr: CbmManager;
+    try {
+      mgr = await startCbm(bin, root);
+      cbmManagers.set(root, mgr);
+      ctx.subscriptions.push({ dispose: () => mgr.dispose() });
+    } catch (err) {
+      console.error(`[Docs Agent] CBM start failed for ${root}:`, err);
+      continue;
+    }
+
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Window, title: 'Docs Agent' },
+      async (progress) => {
+        try {
+          progress.report({ message: 'Indexing repository…' });
+          await mgr.index('moderate');
+          progress.report({ message: 'Loading code graph…' });
+          const g = await fromCbmQuery(mgr, root);
+          if (!codeGraph) codeGraph = new CodeGraph();
+          for (const node of g.nodes.values())    codeGraph.addNode(node);
+          for (const e of g.callEdges)            codeGraph.addCallEdge(e);
+          for (const e of g.tableEdges)           codeGraph.addTableEdge(e);
+          for (const e of g.implementsEdges)      codeGraph.addImplementsEdge(e);
+          for (const e of g.injectsEdges)         codeGraph.addInjectsEdge(e);
+          DashboardPanel.updateGraph(codeGraph);
+          console.log(`[Docs Agent] CBM graph ready — ${codeGraph.nodeCount} nodes, ${codeGraph.edgeCount} edges`);
+        } catch (err) {
+          console.error(`[Docs Agent] CBM indexing failed for ${root}:`, err);
+          vscode.window.showWarningMessage(`Docs Agent: CBM indexing failed — ${(err as Error).message}`);
+        }
+      },
+    );
   }
 }
 
@@ -437,4 +511,7 @@ async function pickWorkspaceRoot(): Promise<string | undefined> {
   return picked?.fsPath;
 }
 
-export function deactivate() {}
+export function deactivate() {
+  for (const mgr of cbmManagers.values()) mgr.dispose();
+  cbmManagers.clear();
+}

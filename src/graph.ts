@@ -1,5 +1,6 @@
 import * as path from 'path';
 import type { GraphifyJson, GraphifyNode } from './graphify-runner';
+import type { CbmManager } from './cbm-runner';
 
 export type SymbolKind = 'class' | 'interface' | 'method' | 'constructor' | 'field';
 export type SqlOperation = 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | 'MERGE' | 'unknown';
@@ -191,6 +192,87 @@ export function fromGraphifyJson(json: GraphifyJson, workspaceRoot: string): Cod
 
   return graph;
 }
+
+// ── codebase-memory-mcp → CodeGraph adapter ───────────────────────────────────
+
+// Labels in codebase-memory-mcp that carry no symbol-level information.
+const CBM_SKIP_LABELS = new Set(['File', 'Folder', 'Module', 'Variable', 'Import']);
+
+export async function fromCbmQuery(cbm: CbmManager, workspaceRoot: string): Promise<CodeGraph> {
+  const graph = new CodeGraph();
+
+  // ── Nodes (paginated search_graph) ──────────────────────────────────────────
+  const PAGE = 200;
+  let offset = 0;
+  while (true) {
+    let page;
+    try {
+      page = await cbm.searchGraph({ limit: PAGE, offset });
+    } catch { break; }
+
+    for (const n of page.results) {
+      if (!n.qualified_name || CBM_SKIP_LABELS.has(n.label)) continue;
+      graph.addNode({
+        symbol: n.qualified_name,
+        label:  n.name ?? n.qualified_name.split('.').pop() ?? n.qualified_name,
+        file:   n.file ?? workspaceRoot,
+        line:   n.line ?? 1,
+        kind:   _cbmLabelToKind(n.label),
+      });
+    }
+
+    if (!page.has_more) break;
+    offset += PAGE;
+    if (offset >= 5000) break; // safety cap — panels render ≤120 nodes anyway
+  }
+
+  // ── CALLS edges ─────────────────────────────────────────────────────────────
+  try {
+    const { rows } = await cbm.queryGraph(
+      'MATCH (a)-[:CALLS]->(b) WHERE a.file IS NOT NULL AND b.file IS NOT NULL ' +
+      'RETURN a.qualified_name AS caller, a.file AS cf, a.line AS cl, b.qualified_name AS callee',
+      5000,
+    );
+    for (const r of rows as { caller?: string; cf?: string; cl?: number; callee?: string }[]) {
+      if (!r.caller || !r.callee) continue;
+      graph.addCallEdge({
+        caller:     r.caller,
+        callerFile: r.cf ?? workspaceRoot,
+        callerLine: r.cl ?? 1,
+        callee:     r.callee.split('.').pop() ?? r.callee,
+      });
+    }
+  } catch { /* Cypher subset may not support this query */ }
+
+  // ── IMPLEMENTS edges ─────────────────────────────────────────────────────────
+  try {
+    const { rows } = await cbm.queryGraph(
+      'MATCH (a)-[:IMPLEMENTS]->(b) ' +
+      'RETURN a.qualified_name AS implementor, b.qualified_name AS contract',
+      2000,
+    );
+    for (const r of rows as { implementor?: string; contract?: string }[]) {
+      if (r.implementor && r.contract) {
+        graph.addImplementsEdge({ implementor: r.implementor, contract: r.contract });
+      }
+    }
+  } catch { /* skip */ }
+
+  return graph;
+}
+
+function _cbmLabelToKind(label: string): SymbolKind {
+  switch (label) {
+    case 'Class':       return 'class';
+    case 'Interface':   return 'interface';
+    case 'Method':      return 'method';
+    case 'Constructor': return 'constructor';
+    case 'Field':       return 'field';
+    default:            return 'method'; // Function, Route, etc.
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function _parseLine(loc?: string): number {
   if (!loc) return 1;
