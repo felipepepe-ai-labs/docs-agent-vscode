@@ -3,7 +3,7 @@
   "publisher": "felipepepe",
   "displayName": "Docs Agent",
   "description": "Anti-hallucination documentation generator powered by local Ollama",
-  "version": "0.1.12",
+  "version": "0.2.0",
   "engines": {
     "vscode": "^1.90.0"
   },
