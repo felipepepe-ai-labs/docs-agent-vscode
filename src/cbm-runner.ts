@@ -1,8 +1,7 @@
-import * as cp from 'child_process';
 import * as path from 'path';
 import { McpClient } from './mcp-client';
 
-// ── Response shapes from codebase-memory-mcp tools ────────────────────────────
+// ── Response shapes ────────────────────────────────────────────────────────────
 
 export interface CbmNode {
   qualified_name: string;
@@ -29,7 +28,7 @@ export interface CbmQueryResult {
 
 export class CbmManager {
   private readonly client:   McpClient;
-  readonly project:          string;   // project name = basename(workspaceRoot)
+  readonly project:          string;
   private readonly repoPath: string;
 
   constructor(client: McpClient, workspaceRoot: string) {
@@ -38,7 +37,8 @@ export class CbmManager {
     this.project  = path.basename(workspaceRoot);
   }
 
-  async index(mode: 'full' | 'moderate' | 'fast' = 'moderate'): Promise<void> {
+  /** Trigger a background re-index (e.g. from the dashboard Re-index button). */
+  async reindex(mode: 'full' | 'moderate' | 'fast' = 'moderate'): Promise<void> {
     await this.client.callTool('index_repository', { repo_path: this.repoPath, mode });
   }
 
@@ -99,28 +99,18 @@ export class CbmManager {
     });
   }
 
-  async reindex(mode: 'full' | 'moderate' | 'fast' = 'moderate'): Promise<void> {
-    // detect_changes to understand scope, then re-index
-    try { await this.detectChanges('HEAD~1'); } catch { /* non-fatal */ }
-    await this.index(mode);
-  }
-
-  dispose(): void { this.client.dispose(); }
+  // No dispose needed — HTTP connections are stateless.
+  dispose(): void {}
 }
 
-// ── Lifecycle helpers ─────────────────────────────────────────────────────────
+// ── Factory ───────────────────────────────────────────────────────────────────
 
-export async function findCbm(): Promise<string | null> {
-  return new Promise(resolve => {
-    cp.exec(
-      process.platform === 'win32' ? 'where codebase-memory-mcp' : 'which codebase-memory-mcp',
-      (_err, stdout) => resolve(stdout.trim().split(/\r?\n/)[0] || null),
-    );
-  });
+/** Connect to the already-running CBM HTTP server and return a manager for workspaceRoot. */
+export function createCbmManager(workspaceRoot: string, port = 9749): CbmManager {
+  return new CbmManager(new McpClient(port), workspaceRoot);
 }
 
-export async function startCbm(bin: string, workspaceRoot: string): Promise<CbmManager> {
-  const client = new McpClient(bin, workspaceRoot);
-  await client.initialize();
-  return new CbmManager(client, workspaceRoot);
+/** Returns true if the CBM HTTP server is reachable on the given port. */
+export async function isCbmAlive(port = 9749): Promise<boolean> {
+  return new McpClient(port).ping();
 }

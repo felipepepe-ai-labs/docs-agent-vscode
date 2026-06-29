@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { buildContext, buildContextFiles, buildContextWithCbm, formatContextBundle } from './context';
-import { CbmManager, findCbm, startCbm } from './cbm-runner';
+import { CbmManager, createCbmManager, isCbmAlive } from './cbm-runner';
 import { DOC_TYPES } from './doctypes';
 import { DashboardPanel } from './dashboard-panel';
 import { CodeGraph, ImpactSummary, fromGraphifyJson } from './graph';
@@ -388,10 +388,12 @@ function mergeFromGraphify(roots: string[]): CodeGraph {
 }
 
 async function initGraph(ctx: vscode.ExtensionContext, roots: string[]): Promise<void> {
-  // ── Primary path: codebase-memory-mcp ────────────────────────────────────────
-  const cbmBin = await findCbm();
-  if (cbmBin) {
-    await initCbm(ctx, roots, cbmBin);
+  const cfg  = vscode.workspace.getConfiguration('docsAgent');
+  const port = cfg.get<number>('cbmPort', 9749);
+
+  // ── Primary path: codebase-memory-mcp (already running, connect via HTTP) ────
+  if (await isCbmAlive(port)) {
+    await initCbm(ctx, roots, port);
     return;
   }
 
@@ -448,41 +450,39 @@ async function initGraph(ctx: vscode.ExtensionContext, roots: string[]): Promise
   }
 }
 
-async function initCbm(ctx: vscode.ExtensionContext, roots: string[], bin: string): Promise<void> {
+async function initCbm(ctx: vscode.ExtensionContext, roots: string[], port: number): Promise<void> {
+  // Register managers — HTTP is stateless so dispose is a no-op, but we register
+  // for symmetry so ctx.subscriptions cleanup works uniformly.
   for (const root of roots) {
-    let mgr: CbmManager;
-    try {
-      mgr = await startCbm(bin, root);
-      cbmManagers.set(root, mgr);
-      ctx.subscriptions.push({ dispose: () => mgr.dispose() });
-    } catch (err) {
-      console.error(`[Docs Agent] CBM start failed for ${root}:`, err);
-      continue;
-    }
-
-    await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Window, title: 'Docs Agent' },
-      async (progress) => {
-        try {
-          progress.report({ message: 'Indexing repository…' });
-          await mgr.index('moderate');
-          progress.report({ message: 'Loading code graph…' });
-          const g = await fromCbmQuery(mgr, root);
-          if (!codeGraph) codeGraph = new CodeGraph();
-          for (const node of g.nodes.values())    codeGraph.addNode(node);
-          for (const e of g.callEdges)            codeGraph.addCallEdge(e);
-          for (const e of g.tableEdges)           codeGraph.addTableEdge(e);
-          for (const e of g.implementsEdges)      codeGraph.addImplementsEdge(e);
-          for (const e of g.injectsEdges)         codeGraph.addInjectsEdge(e);
-          DashboardPanel.updateGraph(codeGraph);
-          console.log(`[Docs Agent] CBM graph ready — ${codeGraph.nodeCount} nodes, ${codeGraph.edgeCount} edges`);
-        } catch (err) {
-          console.error(`[Docs Agent] CBM indexing failed for ${root}:`, err);
-          vscode.window.showWarningMessage(`Docs Agent: CBM indexing failed — ${(err as Error).message}`);
-        }
-      },
-    );
+    const mgr = createCbmManager(root, port);
+    cbmManagers.set(root, mgr);
+    ctx.subscriptions.push({ dispose: () => mgr.dispose() });
   }
+
+  // Load graph in background — CBM indexes automatically, we just query it.
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Window, title: 'Docs Agent' },
+    async (progress) => {
+      try {
+        progress.report({ message: 'Loading code graph from CBM…' });
+        const merged = new CodeGraph();
+        for (const [root, mgr] of cbmManagers) {
+          const g = await fromCbmQuery(mgr, root);
+          for (const node of g.nodes.values())    merged.addNode(node);
+          for (const e of g.callEdges)            merged.addCallEdge(e);
+          for (const e of g.tableEdges)           merged.addTableEdge(e);
+          for (const e of g.implementsEdges)      merged.addImplementsEdge(e);
+          for (const e of g.injectsEdges)         merged.addInjectsEdge(e);
+        }
+        codeGraph = merged;
+        DashboardPanel.updateGraph(codeGraph);
+        console.log(`[Docs Agent] CBM graph loaded — ${codeGraph.nodeCount} nodes, ${codeGraph.edgeCount} edges`);
+      } catch (err) {
+        console.error('[Docs Agent] CBM graph load failed:', err);
+        vscode.window.showWarningMessage(`Docs Agent: CBM graph load failed — ${(err as Error).message}`);
+      }
+    },
+  );
 }
 
 // Returns the single workspace root, or prompts the user to pick one when
