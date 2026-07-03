@@ -73,6 +73,16 @@ export class CodeGraph {
     this.injectsEdges.push(edge);
   }
 
+  // Absorb another graph's nodes and edges. Duplicate node symbols are
+  // overwritten (last write wins); edges are appended without deduplication.
+  merge(other: CodeGraph): void {
+    for (const node of other.nodes.values()) this.addNode(node);
+    this.callEdges.push(...other.callEdges);
+    this.tableEdges.push(...other.tableEdges);
+    this.implementsEdges.push(...other.implementsEdges);
+    this.injectsEdges.push(...other.injectsEdges);
+  }
+
   // Reverse-query: everything that references a class or method.
   // Accepts graphify node ids, human-readable labels, or dot-qualified names.
   queryImpact(symbolName: string): ImpactSummary {

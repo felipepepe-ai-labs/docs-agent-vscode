@@ -59,7 +59,18 @@ export function activate(context: vscode.ExtensionContext) {
     void initGraph(context, roots);
   }
 
-  const command = vscode.commands.registerCommand('docsAgent.documentFile', async () => {
+  context.subscriptions.push(
+    registerDocumentFileCommand(),
+    registerAnalyzeImpactCommand(),
+    registerShowGraphCommand(context, roots),
+    registerSettingsCommand(context),
+    registerDocumentProjectCommand(),
+    registerDashboardCommand(context, roots)
+  );
+}
+
+function registerDocumentFileCommand(): vscode.Disposable {
+  return vscode.commands.registerCommand('docsAgent.documentFile', async () => {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
       vscode.window.showWarningMessage('Docs Agent: No active file.');
@@ -149,8 +160,10 @@ ${codeBundle}`;
       }
     );
   });
+}
 
-  const graphCommand = vscode.commands.registerCommand('docsAgent.showGraph', () => {
+function registerShowGraphCommand(context: vscode.ExtensionContext, roots: string[]): vscode.Disposable {
+  return vscode.commands.registerCommand('docsAgent.showGraph', () => {
     if (!codeGraph) {
       vscode.window.showWarningMessage('Docs Agent: Graph is still building. Try again in a moment.');
       return;
@@ -159,8 +172,10 @@ ${codeBundle}`;
     const cbm = roots.length > 0 ? cbmManagers.get(roots[0]) : undefined;
     GraphPanel.createOrShow(context, codeGraph, cbm);
   });
+}
 
-  const analyzeCommand = vscode.commands.registerCommand('docsAgent.analyzeImpact', async () => {
+function registerAnalyzeImpactCommand(): vscode.Disposable {
+  return vscode.commands.registerCommand('docsAgent.analyzeImpact', async () => {
     if (!codeGraph) {
       vscode.window.showWarningMessage('Docs Agent: Graph is still building. Try again in a moment.');
       return;
@@ -186,12 +201,16 @@ ${codeBundle}`;
       vscode.window.showErrorMessage(`Docs Agent: ${(err as Error).message}`);
     }
   });
+}
 
-  const settingsCommand = vscode.commands.registerCommand('docsAgent.openSettings', () => {
+function registerSettingsCommand(context: vscode.ExtensionContext): vscode.Disposable {
+  return vscode.commands.registerCommand('docsAgent.openSettings', () => {
     SettingsPanel.createOrShow(context);
   });
+}
 
-  const projectCommand = vscode.commands.registerCommand('docsAgent.documentProject', async () => {
+function registerDocumentProjectCommand(): vscode.Disposable {
+  return vscode.commands.registerCommand('docsAgent.documentProject', async () => {
     const root = await pickWorkspaceRoot();
     if (!root) {
       vscode.window.showErrorMessage('Docs Agent: Open a workspace folder first.');
@@ -308,16 +327,16 @@ ${codeBundle}`;
       }
     );
   });
+}
 
-  const dashboardCommand = vscode.commands.registerCommand('docsAgent.showDashboard', () => {
+function registerDashboardCommand(context: vscode.ExtensionContext, roots: string[]): vscode.Disposable {
+  return vscode.commands.registerCommand('docsAgent.showDashboard', () => {
     if (!codeGraph) {
       vscode.window.showWarningMessage('Docs Agent: Graph is still building. Try again in a moment.');
       return;
     }
     DashboardPanel.createOrShow(context, codeGraph, roots);
   });
-
-  context.subscriptions.push(command, analyzeCommand, graphCommand, settingsCommand, projectCommand, dashboardCommand);
 }
 
 function renderImpactDoc(symbol: string, impact: ImpactSummary, nodes: number, edges: number): string {
@@ -379,12 +398,7 @@ function mergeFromGraphify(roots: string[]): CodeGraph {
   for (const root of roots) {
     const json = loadGraphJson(root);
     if (!json) continue;
-    const g = fromGraphifyJson(json, root);
-    for (const node of g.nodes.values())    merged.addNode(node);
-    for (const e of g.callEdges)            merged.addCallEdge(e);
-    for (const e of g.tableEdges)           merged.addTableEdge(e);
-    for (const e of g.implementsEdges)      merged.addImplementsEdge(e);
-    for (const e of g.injectsEdges)         merged.addInjectsEdge(e);
+    merged.merge(fromGraphifyJson(json, root));
   }
   return merged;
 }
@@ -469,12 +483,7 @@ async function initCbm(ctx: vscode.ExtensionContext, roots: string[], port: numb
         progress.report({ message: 'Loading code graph from CBM…' });
         const merged = new CodeGraph();
         for (const [root, mgr] of cbmManagers) {
-          const g = await fromCbmQuery(mgr, root);
-          for (const node of g.nodes.values())    merged.addNode(node);
-          for (const e of g.callEdges)            merged.addCallEdge(e);
-          for (const e of g.tableEdges)           merged.addTableEdge(e);
-          for (const e of g.implementsEdges)      merged.addImplementsEdge(e);
-          for (const e of g.injectsEdges)         merged.addInjectsEdge(e);
+          merged.merge(await fromCbmQuery(mgr, root));
         }
         codeGraph = merged;
         DashboardPanel.updateGraph(codeGraph);

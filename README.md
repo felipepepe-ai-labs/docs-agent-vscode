@@ -18,8 +18,9 @@ Every piece of documentation Docs Agent generates must be grounded in the actual
 |---|---|
 | `Docs Agent: Document this file` | Documents the active file. Resolves its dependencies (interface for `*Impl` classes, imported DTOs) and sends the bundle to the LLM. Writes a `.md` file to the configured docs folder. |
 | `Docs Agent: Generate project documentation suite` | Lets you pick from 11 document types (README, ADRs, C4 diagrams, user stories, functional spec, technical spec, API reference, data model, deployment guide, glossary) and generates them in one pass. |
-| `Docs Agent: Show code graph` | Opens an interactive Three.js graph of the indexed workspace — classes, methods, interfaces, and SQL table references. Supports search, expand-on-click, and jump-to-source. |
+| `Docs Agent: Show code graph` | Opens an interactive Three.js graph of the indexed workspace — classes, methods, interfaces, and SQL table references. Supports search, expand-on-click, Cypher-style queries, and jump-to-source. |
 | `Docs Agent: Analyze impact` | Given a symbol name (class, method, or `Class.method`), shows everything that references it: callers, implementors, consumers (DI injection points), and SQL table operations. |
+| `Docs Agent: Show dashboard` | Opens the graph dashboard with index stats, communities, recent indexing runs, token usage, search, and symbol detail panels. |
 | `Docs Agent: Settings` | Opens the settings panel. |
 
 ---
@@ -50,13 +51,17 @@ Every piece of documentation Docs Agent generates must be grounded in the actual
 | `docsAgent.ollamaUrl` | `http://localhost:11434` | Ollama base URL |
 | `docsAgent.model` | `qwen3:35b` | Ollama model name |
 | `docsAgent.vscodeLmFamily` | *(empty)* | VS Code LM model family, e.g. `gpt-4o`. Empty = first available |
+| `docsAgent.cbmPort` | `9749` | Port for a running codebase-memory-mcp HTTP server |
 | `docsAgent.docsFolder` | `docs` | Output folder relative to workspace root |
+| `docsAgent.language` | `english` | Output language for generated documentation: `english` or `spanish` |
 
 ---
 
 ## Code graph
 
-On activation, Docs Agent scans the workspace and builds an in-memory graph of symbols and their relationships using a regex-based parser (no language server required). The graph is persisted to SQLite so subsequent loads are instant.
+On activation, Docs Agent first tries to connect to a running codebase-memory-mcp HTTP server on `docsAgent.cbmPort` (`9749` by default). When CBM is available, the extension uses it as the primary code intelligence backend for graph layout, search, subgraphs, architecture summaries, and richer documentation context.
+
+If CBM is not available, Docs Agent falls back to the local `graphify` CLI. The fallback loads or rebuilds `graphify-out/graph.json` and keeps an in-memory `CodeGraph` updated from that file.
 
 Edge types indexed:
 
@@ -65,7 +70,7 @@ Edge types indexed:
 - **injects** — field-level dependency injection (`@Autowired`, constructor injection)
 - **table** — SQL string literals referencing database tables (SELECT / INSERT / UPDATE / DELETE)
 
-The graph powers both the visual explorer and the impact analysis command, and is used to enrich per-file documentation with a live "Called by / SQL tables / Injected into" section.
+The graph powers the visual explorer, dashboard, impact analysis command, and per-file documentation enrichment with a live "Called by / SQL tables / Injected into" section.
 
 ---
 
@@ -76,7 +81,11 @@ Prerequisites: Node.js 22+, pnpm, `gcc`/`make` (for the native SQLite addon).
 ```bash
 pnpm install
 pnpm rebuild better-sqlite3   # compile native addon
-pnpm run build                 # build extension + webviews
+pnpm run typecheck             # validate extension and webviews
+pnpm run typecheck:mcp         # validate the MCP server package
+pnpm run test                  # typecheck + vitest unit suite
+pnpm run test:watch            # vitest in watch mode
+pnpm run build                 # build extension, webviews, and MCP server
 ```
 
 Press **F5** in VS Code to launch the Extension Development Host.
