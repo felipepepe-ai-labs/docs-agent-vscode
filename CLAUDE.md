@@ -4,9 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build
 
-There is no test suite. Do not run the build after changes (per project policy).
+Use typecheck before builds when possible. The `test` script runs the typecheck
+followed by the vitest unit suite in `test/`.
 
 ```bash
+# Validate
+pnpm run typecheck     # extension + webviews
+pnpm run typecheck:mcp # MCP server package
+pnpm run test:unit     # vitest unit tests (test/*.test.ts)
+pnpm run test          # typecheck + unit tests
+
 # Build all targets (extension + both webviews)
 pnpm run build
 
@@ -14,6 +21,8 @@ pnpm run build
 pnpm run build:ext       # src/extension.ts → dist/extension.js (CJS)
 pnpm run build:webview   # src/webview/graph-panel.ts → media/graph-panel.js (IIFE)
 pnpm run build:settings  # src/webview/settings-panel.ts → media/settings-panel.js (IIFE)
+pnpm run build:dashboard # src/webview/dashboard-panel.ts → media/dashboard-panel.js (IIFE)
+pnpm run build:mcp       # mcp-server/src/index.ts → mcp-server/dist/index.js (ESM)
 
 # Watch mode during development
 pnpm run watch:ext
@@ -23,7 +32,9 @@ pnpm run watch:webview
 pnpm run package
 ```
 
-Two separate `tsconfig.json` files exist: root for the extension (CJS, Node), and `src/webview/tsconfig.json` for webview code (browser).
+Three TypeScript projects exist: root for the extension (CJS, Node), `src/webview/tsconfig.json` for browser webviews, and `mcp-server/tsconfig.json` for the standalone MCP server.
+
+Unit tests live in `test/` (outside the root tsconfig `include`) and run with vitest. `vitest.config.ts` aliases the `vscode` module to `test/mocks/vscode.ts` so pure logic modules (`schema.ts`, `graph.ts`, `ollama.ts`, `context.ts`, `writer.ts`) are testable outside the extension host.
 
 ## Architecture
 
@@ -41,18 +52,15 @@ User triggers command
 
 The extension's defining feature. Every LLM response is validated by `validateAndParse`: entries without both `file` (matching a `// FILE:` header in the prompt) and `line` (1-based integer) are silently rejected and counted. The prompt enforces this via `OUTPUT_SCHEMA_INSTRUCTION`. Do not relax these validation rules.
 
-### Code graph (`src/graph.ts`, `src/graphify-runner.ts`)
+### Code graph (`src/graph.ts`, `src/cbm-runner.ts`, `src/graphify-runner.ts`)
 
-Graph extraction is delegated to the external **`graphify`** CLI (installable via `uv tool install graphify` or `pip install graphify`). On activation, `initGraph` in `extension.ts`:
-1. Checks for the `graphify` binary via `findGraphify()`; prompts installation if missing.
-2. Loads `graphify-out/graph.json` immediately if it already exists (fast startup).
-3. Runs `graphify .` (or `graphify update .` for incremental) as a subprocess with a VS Code status-bar progress indicator.
-4. Reloads `graph.json` into memory after the run completes.
-5. Registers a `fs.watch` on `graphify-out/` to pick up future manual runs.
+Graph extraction is CBM-first. On activation, `initGraph` in `extension.ts`:
+1. Checks whether codebase-memory-mcp is reachable over HTTP on `docsAgent.cbmPort` (default `9749`).
+2. If CBM is available, creates one `CbmManager` per workspace root and loads graph data through CBM queries.
+3. If CBM is not available, falls back to the external **`graphify`** CLI (installable via `uv tool install graphify` or `pip install graphify`).
+4. In fallback mode, loads `graphify-out/graph.json` if present, runs `graphify` or `graphify update`, and watches the JSON output for later refreshes.
 
-`graphify` outputs **NetworkX node-link JSON** (`graphify-out/graph.json`). `fromGraphifyJson` in `graph.ts` adapts this format into `CodeGraph`. Relation types handled: `calls`, `references` → `callEdge`; `implements` → `implementsEdge`; `uses`, `injects` → `injectsEdge`. Package-level relations (`imports`, `depends_on`, `contains`) are intentionally skipped.
-
-There is no SQLite layer. The graph is fully in-memory; `graph.json` is the only persistent artifact and lives in the workspace, not in VS Code's `globalStorageUri`.
+`fromCbmQuery` and `fromGraphifyJson` both adapt their source data into the in-memory `CodeGraph`. Relation types handled include calls, implements, injects, and SQL table operations.
 
 ### LLM providers (`src/llm.ts`, `src/ollama.ts`)
 
@@ -72,7 +80,9 @@ C# has no dependency resolution yet. Context is formatted as a multi-section bun
 
 ### Webview panels
 
-**Graph panel** (`src/panel.ts` + `src/webview/graph-panel.ts`): Renders the code graph using Three.js. Messages flow via `postMessage` / `onDidReceiveMessage`. The host sends `subgraph` / `stats` / `searchResults` / `reloading` messages; the webview sends `search` / `expand` / `overview` / `reload` / `openFile`. `sendOverviewGraph` limits display to 120 nodes and 400 edges, skipping isolated nodes (degree 0). Call edges resolve callee names (stored as simple method names) via a suffix map.
+**Graph panel** (`src/panel.ts` + `src/webview/graph-panel.ts`): Renders the code graph using Three.js. Messages flow via `postMessage` / `onDidReceiveMessage`. The host sends `subgraph` / `stats` / `searchResults` / `queryAnswer` / `reloading` messages; the webview sends `search` / `expand` / `overview` / `query` / `reload` / `openFile`. CBM mode can provide precomputed 3D positions; graphify fallback uses the local `CodeGraph` view.
+
+**Dashboard panel** (`src/dashboard-panel.ts` + `src/webview/dashboard-panel.ts`): Shows graph stats, communities, recent graphify runs, token usage, search results, and symbol detail. It also exposes a manual graphify refresh action for fallback workflows.
 
 **Settings panel** (`src/settings-panel.ts` + `src/webview/settings-panel.ts`): Simple form that reads/writes VS Code configuration via `postMessage`.
 
@@ -93,6 +103,6 @@ Markdown files injected as the system prompt when documenting language-specific 
 
 ## Key constraints
 
-- `graphify` is an **external runtime dependency** — the extension cannot build the graph if it is not installed. `promptInstall()` shows a warning with install options, but does not verify success.
+- codebase-memory-mcp is the preferred graph backend when reachable. `graphify` remains an external runtime fallback; `promptInstall()` shows a warning with install options, but does not verify success.
 - The webview CSP allows no inline scripts — only nonce-protected external scripts from `localResourceRoots`. Do not add `'unsafe-inline'` to the policy. Nonces must be generated with `crypto.randomUUID()`, never `Math.random()`.
 - `context.ts` import resolution is hardcoded to `com.example.*` and `src/main/java`. Update both constants if the target Java package changes.

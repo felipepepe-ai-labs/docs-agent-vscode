@@ -8,6 +8,8 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 
+export {};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function el<T extends HTMLElement>(id: string): T {

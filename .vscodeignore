@@ -1,5 +1,7 @@
 src/**
 !src/primers/**
+test/**
+vitest.config.ts
 node_modules/**
 tsconfig.json
 .gitignore

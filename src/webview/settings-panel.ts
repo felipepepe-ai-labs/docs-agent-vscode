@@ -1,6 +1,8 @@
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 const vscode = acquireVsCodeApi();
 
+export {};
+
 interface Settings {
   provider:       string;
   ollamaUrl:      string;

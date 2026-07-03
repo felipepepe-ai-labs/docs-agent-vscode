@@ -93,6 +93,23 @@ export async function chat(messages: OllamaMessage[], config: OllamaConfig): Pro
   let completionTokens = 0;
   let leftover         = '';
 
+  const consumeLine = (line: string): void => {
+    if (!line.trim()) return;
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      const msg = parsed['message'] as Record<string, unknown> | undefined;
+      if (typeof msg?.['content'] === 'string') {
+        chunks.push(msg['content']);
+      }
+      if (parsed['done'] === true) {
+        promptTokens     = (parsed['prompt_eval_count'] as number) ?? 0;
+        completionTokens = (parsed['eval_count']        as number) ?? 0;
+      }
+    } catch {
+      // malformed line — skip
+    }
+  };
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -101,23 +118,13 @@ export async function chat(messages: OllamaMessage[], config: OllamaConfig): Pro
     const lines = leftover.split('\n');
     leftover = lines.pop() ?? '';
 
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const parsed = JSON.parse(line) as Record<string, unknown>;
-        const msg = parsed['message'] as Record<string, unknown> | undefined;
-        if (typeof msg?.['content'] === 'string') {
-          chunks.push(msg['content']);
-        }
-        if (parsed['done'] === true) {
-          promptTokens     = (parsed['prompt_eval_count'] as number) ?? 0;
-          completionTokens = (parsed['eval_count']        as number) ?? 0;
-        }
-      } catch {
-        // malformed line — skip
-      }
-    }
+    for (const line of lines) consumeLine(line);
   }
+
+  // The stream is not guaranteed to end with a newline — flush the tail,
+  // which typically carries the done:true line with the token counts.
+  leftover += decoder.decode();
+  consumeLine(leftover);
 
   return { content: chunks.join(''), promptTokens, completionTokens };
 }
