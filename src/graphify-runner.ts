@@ -129,15 +129,15 @@ export function getGraphInfo(workspaceRoot: string): GraphInfo {
 
 const MAX_GRAPH_JSON_BYTES = 50 * 1024 * 1024; // 50 MB
 
-export function loadGraphJson(workspaceRoot: string): GraphifyJson | null {
+export async function loadGraphJson(workspaceRoot: string): Promise<GraphifyJson | null> {
   const p = graphOutPath(workspaceRoot);
   try {
-    const stat = fs.statSync(p);
+    const stat = await fs.promises.stat(p);
     if (stat.size > MAX_GRAPH_JSON_BYTES) {
       console.warn(`[Docs Agent] graph.json is ${stat.size} bytes — exceeds 50 MB limit, skipping`);
       return null;
     }
-    const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const raw = JSON.parse(await fs.promises.readFile(p, 'utf8'));
     if (!raw || !Array.isArray(raw.nodes)) {
       console.warn('[Docs Agent] graph.json: "nodes" is not an array — skipping');
       return null;

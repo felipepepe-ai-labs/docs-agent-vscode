@@ -132,7 +132,7 @@ export class GraphPanel {
         for (const folder of folders) {
           const root = folder.uri.fsPath;
           await runGraphify(root, true);
-          const json = loadGraphJson(root);
+          const json = await loadGraphJson(root);
           if (!json) continue;
           const g = fromGraphifyJson(json, root);
           for (const node of g.nodes.values())    merged.addNode(node);

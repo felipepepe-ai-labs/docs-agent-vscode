@@ -236,37 +236,43 @@ export async function fromCbmQuery(cbm: CbmManager, workspaceRoot: string): Prom
     if (offset >= 5000) break; // safety cap — panels render ≤120 nodes anyway
   }
 
-  // ── CALLS edges ─────────────────────────────────────────────────────────────
-  try {
-    const { rows } = await cbm.queryGraph(
-      'MATCH (a)-[:CALLS]->(b) WHERE a.file IS NOT NULL AND b.file IS NOT NULL ' +
-      'RETURN a.qualified_name AS caller, a.file AS cf, a.line AS cl, b.qualified_name AS callee',
-      5000,
-    );
-    for (const r of rows as { caller?: string; cf?: string; cl?: number; callee?: string }[]) {
-      if (!r.caller || !r.callee) continue;
-      graph.addCallEdge({
-        caller:     r.caller,
-        callerFile: r.cf ?? workspaceRoot,
-        callerLine: r.cl ?? 1,
-        callee:     r.callee.split('.').pop() ?? r.callee,
-      });
-    }
-  } catch { /* Cypher subset may not support this query */ }
-
-  // ── IMPLEMENTS edges ─────────────────────────────────────────────────────────
-  try {
-    const { rows } = await cbm.queryGraph(
-      'MATCH (a)-[:IMPLEMENTS]->(b) ' +
-      'RETURN a.qualified_name AS implementor, b.qualified_name AS contract',
-      2000,
-    );
-    for (const r of rows as { implementor?: string; contract?: string }[]) {
-      if (r.implementor && r.contract) {
-        graph.addImplementsEdge({ implementor: r.implementor, contract: r.contract });
+  // ── CALLS + IMPLEMENTS edges — independent queries, fetched in parallel.
+  // Each keeps its own catch so one failing Cypher query cannot sink the other.
+  const loadCalls = async (): Promise<void> => {
+    try {
+      const { rows } = await cbm.queryGraph(
+        'MATCH (a)-[:CALLS]->(b) WHERE a.file IS NOT NULL AND b.file IS NOT NULL ' +
+        'RETURN a.qualified_name AS caller, a.file AS cf, a.line AS cl, b.qualified_name AS callee',
+        5000,
+      );
+      for (const r of rows as { caller?: string; cf?: string; cl?: number; callee?: string }[]) {
+        if (!r.caller || !r.callee) continue;
+        graph.addCallEdge({
+          caller:     r.caller,
+          callerFile: r.cf ?? workspaceRoot,
+          callerLine: r.cl ?? 1,
+          callee:     r.callee.split('.').pop() ?? r.callee,
+        });
       }
-    }
-  } catch { /* skip */ }
+    } catch { /* Cypher subset may not support this query */ }
+  };
+
+  const loadImplements = async (): Promise<void> => {
+    try {
+      const { rows } = await cbm.queryGraph(
+        'MATCH (a)-[:IMPLEMENTS]->(b) ' +
+        'RETURN a.qualified_name AS implementor, b.qualified_name AS contract',
+        2000,
+      );
+      for (const r of rows as { implementor?: string; contract?: string }[]) {
+        if (r.implementor && r.contract) {
+          graph.addImplementsEdge({ implementor: r.implementor, contract: r.contract });
+        }
+      }
+    } catch { /* skip */ }
+  };
+
+  await Promise.all([loadCalls(), loadImplements()]);
 
   return graph;
 }

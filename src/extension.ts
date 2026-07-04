@@ -393,10 +393,10 @@ function renderImpactDoc(symbol: string, impact: ImpactSummary, nodes: number, e
 
 // ── Graph helpers ─────────────────────────────────────────────────────────────
 
-function mergeFromGraphify(roots: string[]): CodeGraph {
+async function mergeFromGraphify(roots: string[]): Promise<CodeGraph> {
   const merged = new CodeGraph();
   for (const root of roots) {
-    const json = loadGraphJson(root);
+    const json = await loadGraphJson(root);
     if (!json) continue;
     merged.merge(fromGraphifyJson(json, root));
   }
@@ -423,7 +423,7 @@ async function initGraph(ctx: vscode.ExtensionContext, roots: string[]): Promise
 
   if (roots.some(r => fs.existsSync(graphOutPath(r)))) {
     try {
-      codeGraph = mergeFromGraphify(roots);
+      codeGraph = await mergeFromGraphify(roots);
       console.log(`[Docs Agent] Graph loaded — ${codeGraph.nodeCount} nodes (pre-existing)`);
     } catch (err) {
       console.error('[Docs Agent] Graph load failed:', err);
@@ -444,7 +444,7 @@ async function initGraph(ctx: vscode.ExtensionContext, roots: string[]): Promise
         }
       }
       try {
-        codeGraph = mergeFromGraphify(roots);
+        codeGraph = await mergeFromGraphify(roots);
         DashboardPanel.updateGraph(codeGraph);
         console.log(`[Docs Agent] Graph ready — ${codeGraph.nodeCount} nodes, ${codeGraph.edgeCount} edges`);
       } catch (err) {
@@ -455,13 +455,13 @@ async function initGraph(ctx: vscode.ExtensionContext, roots: string[]): Promise
 
   for (const root of roots) {
     ctx.subscriptions.push(watchGraphJson(root, () => {
-      try {
-        codeGraph = mergeFromGraphify(roots);
-        DashboardPanel.updateGraph(codeGraph);
-        console.log(`[Docs Agent] Graph refreshed — ${codeGraph!.nodeCount} nodes`);
-      } catch (err) {
-        console.error('[Docs Agent] Graph watch reload failed:', err);
-      }
+      void mergeFromGraphify(roots)
+        .then(merged => {
+          codeGraph = merged;
+          DashboardPanel.updateGraph(merged);
+          console.log(`[Docs Agent] Graph refreshed — ${merged.nodeCount} nodes`);
+        })
+        .catch(err => console.error('[Docs Agent] Graph watch reload failed:', err));
     }));
   }
 }
