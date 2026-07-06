@@ -47,6 +47,54 @@ describe('CodeGraph.queryImpact', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].operation).toBe('UPDATE');
   });
+
+  it('resolves node labels case-insensitively to node ids', () => {
+    const impact = sampleGraph().queryImpact('orderservice');
+    expect(impact.implementors).toEqual(['OrderServiceImpl']);
+    expect(impact.consumers).toEqual([{ symbol: 'OrderController', fieldName: 'orderService' }]);
+  });
+});
+
+describe('CodeGraph index API', () => {
+  it('resolves symbols by simple-name suffix', () => {
+    const g = sampleGraph();
+    expect(g.nodesBySuffix('create')).toEqual(['OrderController.create']);
+    expect(g.nodesBySuffix('OrderService')).toEqual(['OrderService']);
+    expect(g.nodesBySuffix('nope')).toEqual([]);
+  });
+
+  it('returns call edges originating from a caller', () => {
+    const g = sampleGraph();
+    const out = g.callEdgesFrom('OrderController.create');
+    expect(out).toHaveLength(1);
+    expect(out[0].callee).toBe('confirm');
+    expect(g.callEdgesFrom('ghost')).toEqual([]);
+  });
+
+  it('keeps indexes consistent after merge', () => {
+    const a = sampleGraph();
+    // Query once so indexes are built, then mutate via merge.
+    expect(a.nodesBySuffix('create')).toEqual(['OrderController.create']);
+
+    const b = new CodeGraph();
+    b.addNode({ symbol: 'PaymentService.pay', label: '.pay()', file: '/ws2/PaymentService.java', line: 9, kind: 'method' });
+    b.addCallEdge({ caller: 'PaymentService.pay', callerFile: '/ws2/PaymentService.java', callerLine: 10, callee: 'confirm' });
+    a.merge(b);
+
+    expect(a.nodesBySuffix('pay')).toEqual(['PaymentService.pay']);
+    expect(a.callEdgesFrom('PaymentService.pay')).toHaveLength(1);
+    expect(a.queryImpact('OrderService.confirm').callers).toHaveLength(2);
+  });
+
+  it('refreshes label lookups after a node overwrite', () => {
+    const g = sampleGraph();
+    expect(g.queryImpact('orderservice').implementors).toEqual(['OrderServiceImpl']);
+
+    g.addNode({ symbol: 'OrderService', label: 'BillingContract', file: '/ws/OrderService.java', line: 5, kind: 'interface' });
+
+    expect(g.queryImpact('billingcontract').implementors).toEqual(['OrderServiceImpl']);
+    expect(g.queryImpact('orderservice').implementors).toEqual([]);
+  });
 });
 
 describe('CodeGraph.merge', () => {
