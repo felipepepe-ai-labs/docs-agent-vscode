@@ -20,14 +20,6 @@ function fmt(n: number): string {
   return n.toLocaleString();
 }
 
-function timeAgo(ms: number): string {
-  const diff = Date.now() - ms;
-  const s = Math.floor(diff / 1000);
-  if (s < 60)   return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  return `${Math.floor(s / 3600)}h ago`;
-}
-
 function kindBadge(kind: string): string {
   return `<span class="badge badge-${kind}">${kind}</span>`;
 }
@@ -35,12 +27,6 @@ function kindBadge(kind: string): string {
 // ── Wire buttons ──────────────────────────────────────────────────────────────
 
 el('btn-refresh').addEventListener('click', () => vscode.postMessage({ type: 'refresh' }));
-
-el('btn-run-graphify').addEventListener('click', () => {
-  el('btn-run-graphify').setAttribute('disabled', 'true');
-  el('run-status').textContent = 'Running graphify…';
-  vscode.postMessage({ type: 'runGraphify' });
-});
 
 el('inspector-search').addEventListener('keydown', (e: KeyboardEvent) => {
   if (e.key === 'Enter') triggerSearch();
@@ -60,20 +46,9 @@ window.addEventListener('message', (event) => {
   switch (msg.type) {
     case 'stats':          renderStats(msg);         break;
     case 'communities':    renderCommunities(msg);   break;
-    case 'runInfo':        renderRunInfo(msg);        break;
     case 'tokenUsage':     renderTokenUsage(msg);    break;
     case 'searchResults':  renderSearchResults(msg); break;
     case 'symbolDetail':   renderSymbolDetail(msg);  break;
-    case 'graphifyRunning': {
-      el('btn-run-graphify').setAttribute('disabled', 'true');
-      el('run-status').textContent = 'Running graphify…';
-      break;
-    }
-    case 'graphifyDone': {
-      el('btn-run-graphify').removeAttribute('disabled');
-      el('run-status').textContent = '';
-      break;
-    }
   }
 });
 
@@ -134,32 +109,6 @@ function renderCommunities(msg: any) {
       vscode.postMessage({ type: 'inspect', nodeId: id });
     });
   });
-}
-
-function renderRunInfo(msg: any) {
-  const div = el('run-info');
-  const infos: any[] = msg.infos;
-
-  if (!infos.length) {
-    div.innerHTML = '<p class="empty">No workspace folders.</p>';
-    return;
-  }
-
-  div.innerHTML = infos.map(info => {
-    if (!info.exists) {
-      return `<div class="run-row"><span class="run-path">${info.root}</span><span class="badge badge-warn">no graph.json</span></div>`;
-    }
-    const age  = info.mtimeMs   ? timeAgo(info.mtimeMs)                        : '—';
-    const size = info.sizeBytes ? `${(info.sizeBytes / 1024).toFixed(1)} KB`   : '—';
-    return `
-      <div class="run-row">
-        <span class="run-path" title="${info.root}">${info.root.split('/').pop()}</span>
-        <span class="run-meta">Last run: <strong>${age}</strong> · ${size}</span>
-      </div>`;
-  }).join('');
-
-  el('btn-run-graphify').removeAttribute('disabled');
-  el('run-status').textContent = '';
 }
 
 function renderTokenUsage(msg: any) {

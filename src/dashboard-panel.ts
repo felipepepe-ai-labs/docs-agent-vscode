@@ -1,13 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { CodeGraph, fromGraphifyJson } from './graph';
-import { getGraphInfo, loadGraphJson, runGraphify } from './graphify-runner';
+import { CodeGraph } from './graph';
 import { getTokenRecords, getTokenTotals } from './token-store';
 
 type InMessage =
   | { type: 'refresh' }
-  | { type: 'runGraphify' }
   | { type: 'search';   query:  string }
   | { type: 'inspect';  nodeId: string }
   | { type: 'openFile'; file:   string; line?: number };
@@ -73,7 +71,6 @@ export class DashboardPanel {
   private pushAll(): void {
     this.pushStats();
     this.pushCommunities();
-    this.pushRunInfo();
     this.pushTokenUsage();
   }
 
@@ -120,9 +117,8 @@ export class DashboardPanel {
     const map = new Map<number, { name: string; nodes: { id: string; label: string; kind: string }[] }>();
 
     for (const n of this.graph.nodes.values()) {
-      // graphify stores community on the original GraphifyNode, not on SymbolNode.
-      // We use the id prefix heuristic as fallback: first segment before '.' = package/module.
-      const communityId   = 0;   // populated below via label grouping
+      // Group by first segment (package / top-level module name) as fallback community.
+      const communityId   = 0;
       const communityName = n.symbol.includes('.')
         ? n.symbol.split('.')[0]
         : 'default';
@@ -145,11 +141,6 @@ export class DashboardPanel {
     this.panel.webview.postMessage({ type: 'communities', communities });
   }
 
-  private pushRunInfo(): void {
-    const infos = this.roots.map(r => ({ root: r, ...getGraphInfo(r) }));
-    this.panel.webview.postMessage({ type: 'runInfo', infos });
-  }
-
   private pushTokenUsage(): void {
     this.panel.webview.postMessage({
       type:    'tokenUsage',
@@ -163,43 +154,9 @@ export class DashboardPanel {
   private onMessage(msg: InMessage): void {
     switch (msg.type) {
       case 'refresh':     this.pushAll();                              break;
-      case 'runGraphify': void this.triggerGraphify();                 break;
       case 'search':      this.sendSearchResults(msg.query);          break;
       case 'inspect':     this.sendSymbolDetail(msg.nodeId);          break;
       case 'openFile':    void this.openFile(msg.file, msg.line);     break;
-    }
-  }
-
-  private async triggerGraphify(): Promise<void> {
-    this.panel.webview.postMessage({ type: 'graphifyRunning' });
-    try {
-      await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Window, title: 'Docs Agent' },
-        async (progress) => {
-          for (const root of this.roots) {
-            const update = getGraphInfo(root).exists;
-            progress.report({ message: update ? 'Updating graph…' : 'Building graph…' });
-            await runGraphify(root, update, progress);
-          }
-          // Reload graph from fresh json
-          const merged = new CodeGraph();
-          for (const root of this.roots) {
-            const json = loadGraphJson(root);
-            if (!json) continue;
-            const g = fromGraphifyJson(json, root);
-            for (const node of g.nodes.values())   merged.addNode(node);
-            for (const e of g.callEdges)            merged.addCallEdge(e);
-            for (const e of g.tableEdges)           merged.addTableEdge(e);
-            for (const e of g.implementsEdges)      merged.addImplementsEdge(e);
-            for (const e of g.injectsEdges)         merged.addInjectsEdge(e);
-          }
-          this.graph = merged;
-        },
-      );
-      this.pushAll();
-    } catch (err) {
-      vscode.window.showErrorMessage(`Docs Agent: graphify failed — ${(err as Error).message}`);
-      this.panel.webview.postMessage({ type: 'graphifyDone' });
     }
   }
 
@@ -294,13 +251,6 @@ export class DashboardPanel {
       <section class="card" id="card-communities">
         <h2>Communities</h2>
         <ul id="community-list"></ul>
-      </section>
-
-      <section class="card" id="card-run">
-        <h2>Graphify Run Info</h2>
-        <div id="run-info"></div>
-        <button id="btn-run-graphify" class="btn-primary">▶ Run graphify</button>
-        <div id="run-status"></div>
       </section>
 
       <section class="card" id="card-inspector">

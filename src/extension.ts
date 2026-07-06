@@ -5,9 +5,7 @@ import { buildContext, buildContextFiles, buildContextWithCbm, formatContextBund
 import { CbmManager, createCbmManager, isCbmAlive } from './cbm-runner';
 import { DOC_TYPES } from './doctypes';
 import { DashboardPanel } from './dashboard-panel';
-import { CodeGraph, ImpactSummary, fromGraphifyJson } from './graph';
-import { findGraphify, graphOutPath, loadGraphJson, promptInstall, runGraphify, setCachedBin, watchGraphJson } from './graphify-runner';
-import { fromCbmQuery } from './graph';
+import { CodeGraph, ImpactSummary, fromCbmQuery } from './graph';
 import { chat, getLlmConfig, setActiveCommand } from './llm';
 import { GraphPanel } from './panel';
 import { buildProjectContext } from './project-context';
@@ -17,8 +15,7 @@ import { normalizeMermaidBlocks, openDoc, writeDoc } from './writer';
 
 const PRIMERS_DIR = path.join(__dirname, '..', 'src', 'primers');
 let codeGraph: CodeGraph | null = null;
-// One CbmManager per workspace root, keyed by fsPath.
-// Empty when codebase-memory-mcp is not installed — extension degrades to graphify.
+// One CbmManager per workspace root. Empty when CBM is not installed — graph stays empty.
 const cbmManagers = new Map<string, CbmManager>();
 
 function languageInstruction(language: string): string {
@@ -393,77 +390,19 @@ function renderImpactDoc(symbol: string, impact: ImpactSummary, nodes: number, e
 
 // ── Graph helpers ─────────────────────────────────────────────────────────────
 
-function mergeFromGraphify(roots: string[]): CodeGraph {
-  const merged = new CodeGraph();
-  for (const root of roots) {
-    const json = loadGraphJson(root);
-    if (!json) continue;
-    merged.merge(fromGraphifyJson(json, root));
-  }
-  return merged;
-}
-
 async function initGraph(ctx: vscode.ExtensionContext, roots: string[]): Promise<void> {
   const cfg  = vscode.workspace.getConfiguration('docsAgent');
   const port = cfg.get<number>('cbmPort', 9749);
 
-  // ── Primary path: codebase-memory-mcp (already running, connect via HTTP) ────
+  // Primary path: codebase-memory-mcp (already running, connect via HTTP)
   if (await isCbmAlive(port)) {
     await initCbm(ctx, roots, port);
     return;
   }
 
-  // ── Fallback path: graphify ───────────────────────────────────────────────────
-  const bin = await findGraphify();
-  if (!bin) {
-    void promptInstall();
-    return;
-  }
-  setCachedBin(bin);
-
-  if (roots.some(r => fs.existsSync(graphOutPath(r)))) {
-    try {
-      codeGraph = mergeFromGraphify(roots);
-      console.log(`[Docs Agent] Graph loaded — ${codeGraph.nodeCount} nodes (pre-existing)`);
-    } catch (err) {
-      console.error('[Docs Agent] Graph load failed:', err);
-    }
-  }
-
-  await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Window, title: 'Docs Agent' },
-    async (progress) => {
-      for (const root of roots) {
-        const update = fs.existsSync(graphOutPath(root));
-        progress.report({ message: update ? 'Updating graph…' : 'Building graph…' });
-        try {
-          await runGraphify(root, update, progress);
-        } catch (err) {
-          console.error(`[Docs Agent] graphify failed for ${root}:`, err);
-          vscode.window.showWarningMessage(`Docs Agent: graphify failed — ${(err as Error).message}`);
-        }
-      }
-      try {
-        codeGraph = mergeFromGraphify(roots);
-        DashboardPanel.updateGraph(codeGraph);
-        console.log(`[Docs Agent] Graph ready — ${codeGraph.nodeCount} nodes, ${codeGraph.edgeCount} edges`);
-      } catch (err) {
-        console.error('[Docs Agent] Graph reload failed:', err);
-      }
-    },
-  );
-
-  for (const root of roots) {
-    ctx.subscriptions.push(watchGraphJson(root, () => {
-      try {
-        codeGraph = mergeFromGraphify(roots);
-        DashboardPanel.updateGraph(codeGraph);
-        console.log(`[Docs Agent] Graph refreshed — ${codeGraph!.nodeCount} nodes`);
-      } catch (err) {
-        console.error('[Docs Agent] Graph watch reload failed:', err);
-      }
-    }));
-  }
+  // No CBM available — graph stays empty. Code graph features will show 0 nodes/edges.
+  codeGraph = new CodeGraph();
+  console.log('[Docs Agent] Graph: no CBM available — empty graph (0 nodes)');
 }
 
 async function initCbm(ctx: vscode.ExtensionContext, roots: string[], port: number): Promise<void> {

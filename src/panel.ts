@@ -2,8 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { CbmManager } from './cbm-runner';
-import { CodeGraph, fromGraphifyJson } from './graph';
-import { loadGraphJson, runGraphify } from './graphify-runner';
+import { CodeGraph } from './graph';
 
 type WebviewMessage =
   | { type: 'search';   query: string  }
@@ -122,36 +121,12 @@ export class GraphPanel {
       return;
     }
 
-    const folders = vscode.workspace.workspaceFolders ?? [];
-    if (folders.length === 0) return;
-
-    this.panel.webview.postMessage({ type: 'reloading' });
-    void (async () => {
-      try {
-        const merged = new CodeGraph();
-        for (const folder of folders) {
-          const root = folder.uri.fsPath;
-          await runGraphify(root, true);
-          const json = loadGraphJson(root);
-          if (!json) continue;
-          const g = fromGraphifyJson(json, root);
-          for (const node of g.nodes.values())    merged.addNode(node);
-          for (const e of g.callEdges)            merged.addCallEdge(e);
-          for (const e of g.tableEdges)           merged.addTableEdge(e);
-          for (const e of g.implementsEdges)      merged.addImplementsEdge(e);
-          for (const e of g.injectsEdges)         merged.addInjectsEdge(e);
-        }
-        this.graph = merged;
-        this.panel.webview.postMessage({
-          type:      'stats',
-          nodeCount: this.graph.nodeCount,
-          edgeCount: this.graph.edgeCount,
-        });
-        this.sendOverviewGraph();
-      } catch (err) {
-        vscode.window.showErrorMessage(`Docs Agent: Re-index failed — ${(err as Error).message}`);
-      }
-    })();
+    // No CBM — graph stays empty; nothing to reload.
+    this.panel.webview.postMessage({
+      type:      'stats',
+      nodeCount: this.graph.nodeCount,
+      edgeCount: this.graph.edgeCount,
+    });
   }
 
   private sendOverviewGraph(): void {

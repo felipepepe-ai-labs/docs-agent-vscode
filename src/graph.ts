@@ -1,5 +1,4 @@
 import * as path from 'path';
-import type { GraphifyJson, GraphifyNode } from './graphify-runner';
 import type { CbmManager } from './cbm-runner';
 
 export type SymbolKind = 'class' | 'interface' | 'method' | 'constructor' | 'field';
@@ -144,65 +143,6 @@ export class CodeGraph {
   }
 }
 
-// ── graphify graph.json → CodeGraph adapter ───────────────────────────────────
-
-export function fromGraphifyJson(json: GraphifyJson, workspaceRoot: string): CodeGraph {
-  const graph     = new CodeGraph();
-  const nodeIndex = new Map<string, GraphifyNode>();
-
-  for (const n of json.nodes) {
-    nodeIndex.set(n.id, n);
-    // Skip document / image / video nodes — they have no symbol structure.
-    if (n.file_type && n.file_type !== 'code') continue;
-    graph.addNode({
-      symbol: n.id,
-      label:  n.label,
-      file:   n.source_file ? path.resolve(workspaceRoot, n.source_file) : workspaceRoot,
-      line:   _parseLine(n.source_location),
-      kind:   _inferKind(n),
-    });
-  }
-
-  // NetworkX exports use "links"; some graphify builds use "edges".
-  const links = json.links ?? json.edges ?? [];
-
-  for (const link of links) {
-    if (!graph.nodes.has(link.source) || !graph.nodes.has(link.target)) continue;
-    const src = nodeIndex.get(link.source);
-
-    switch (link.relation) {
-      case 'calls':
-      case 'references':
-        graph.addCallEdge({
-          caller:     link.source,
-          callerFile: src?.source_file ? path.resolve(workspaceRoot, src.source_file) : workspaceRoot,
-          callerLine: _parseLine(src?.source_location),
-          callee:     link.target,
-        });
-        break;
-
-      case 'implements':
-        graph.addImplementsEdge({ implementor: link.source, contract: link.target });
-        break;
-
-      case 'uses':
-      case 'injects': {
-        const tgt = nodeIndex.get(link.target);
-        graph.addInjectsEdge({
-          consumer:   link.source,
-          dependency: link.target,
-          fieldName:  tgt?.label ?? link.target,
-        });
-        break;
-      }
-
-      // 'imports', 'depends_on', 'contains' — package/file-level; not useful at symbol granularity.
-    }
-  }
-
-  return graph;
-}
-
 // ── codebase-memory-mcp → CodeGraph adapter ───────────────────────────────────
 
 // Labels in codebase-memory-mcp that carry no symbol-level information.
@@ -288,10 +228,4 @@ function _parseLine(loc?: string): number {
   if (!loc) return 1;
   const m = /L(\d+)/.exec(loc);
   return m ? parseInt(m[1], 10) : 1;
-}
-
-function _inferKind(n: GraphifyNode): SymbolKind {
-  const label = n.label ?? '';
-  if (label.startsWith('.') || /\(/.test(label)) return 'method';
-  return 'class';
 }

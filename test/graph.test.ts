@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CodeGraph, fromGraphifyJson } from '../src/graph';
-import type { GraphifyJson } from '../src/graphify-runner';
+import { CodeGraph } from '../src/graph';
 
 function sampleGraph(): CodeGraph {
   const g = new CodeGraph();
@@ -78,54 +77,5 @@ describe('CodeGraph.merge', () => {
 
     expect(a.nodeCount).toBe(3);
     expect(a.nodes.get('OrderService')!.line).toBe(99);
-  });
-});
-
-describe('fromGraphifyJson adapter', () => {
-  const json: GraphifyJson = {
-    nodes: [
-      { id: 'OrderService', label: 'OrderService', source_file: 'src/OrderService.java', source_location: 'L5' },
-      { id: 'OrderServiceImpl', label: 'OrderServiceImpl', source_file: 'src/OrderServiceImpl.java', source_location: 'L8' },
-      { id: 'OrderServiceImpl.confirm', label: '.confirm()', source_file: 'src/OrderServiceImpl.java', source_location: 'L30' },
-      { id: 'diagram.png', label: 'diagram', file_type: 'image' },
-    ],
-    links: [
-      { source: 'OrderServiceImpl.confirm', target: 'OrderService', relation: 'calls' },
-      { source: 'OrderServiceImpl', target: 'OrderService', relation: 'implements' },
-      { source: 'OrderServiceImpl', target: 'OrderService', relation: 'injects' },
-      { source: 'OrderServiceImpl', target: 'OrderService', relation: 'contains' },
-      { source: 'ghost', target: 'OrderService', relation: 'calls' },
-    ],
-  };
-
-  it('adapts nodes, skipping non-code file types', () => {
-    const g = fromGraphifyJson(json, '/ws');
-    expect(g.nodeCount).toBe(3);
-    expect(g.nodes.has('diagram.png')).toBe(false);
-    expect(g.nodes.get('OrderService')).toMatchObject({ file: '/ws/src/OrderService.java', line: 5 });
-  });
-
-  it('infers method kind from label shape', () => {
-    const g = fromGraphifyJson(json, '/ws');
-    expect(g.nodes.get('OrderServiceImpl.confirm')!.kind).toBe('method');
-    expect(g.nodes.get('OrderService')!.kind).toBe('class');
-  });
-
-  it('maps relations to typed edges and drops package-level ones', () => {
-    const g = fromGraphifyJson(json, '/ws');
-    expect(g.callEdges).toHaveLength(1);
-    expect(g.implementsEdges).toHaveLength(1);
-    expect(g.injectsEdges).toHaveLength(1);
-  });
-
-  it('drops edges whose endpoints are not in the node set', () => {
-    const g = fromGraphifyJson(json, '/ws');
-    expect(g.callEdges.some(e => e.caller === 'ghost')).toBe(false);
-  });
-
-  it('reads "edges" key when "links" is absent', () => {
-    const alt: GraphifyJson = { nodes: json.nodes, edges: json.links };
-    const g = fromGraphifyJson(alt, '/ws');
-    expect(g.callEdges).toHaveLength(1);
   });
 });

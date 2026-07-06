@@ -59,9 +59,9 @@ Every piece of documentation Docs Agent generates must be grounded in the actual
 
 ## Code graph
 
-On activation, Docs Agent first tries to connect to a running codebase-memory-mcp HTTP server on `docsAgent.cbmPort` (`9749` by default). When CBM is available, the extension uses it as the primary code intelligence backend for graph layout, search, subgraphs, architecture summaries, and richer documentation context.
+On activation, Docs Agent tries to connect to a running codebase-memory-mcp HTTP server on `docsAgent.cbmPort` (`9749` by default). When CBM is available, the extension uses it as the primary code intelligence backend for graph layout, search, subgraphs, architecture summaries, and richer documentation context.
 
-If CBM is not available, Docs Agent falls back to the local `graphify` CLI. The fallback loads or rebuilds `graphify-out/graph.json` and keeps an in-memory `CodeGraph` updated from that file.
+When CBM is not available, the code graph shows 0 nodes/edges. Install codebase-memory-mcp to enable full graph features.
 
 Edge types indexed:
 
