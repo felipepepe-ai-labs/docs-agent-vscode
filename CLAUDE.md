@@ -52,15 +52,14 @@ User triggers command
 
 The extension's defining feature. Every LLM response is validated by `validateAndParse`: entries without both `file` (matching a `// FILE:` header in the prompt) and `line` (1-based integer) are silently rejected and counted. The prompt enforces this via `OUTPUT_SCHEMA_INSTRUCTION`. Do not relax these validation rules.
 
-### Code graph (`src/graph.ts`, `src/cbm-runner.ts`, `src/graphify-runner.ts`)
+### Code graph (`src/graph.ts`, `src/cbm-runner.ts`)
 
-Graph extraction is CBM-first. On activation, `initGraph` in `extension.ts`:
-1. Checks whether codebase-memory-mcp is reachable over HTTP on `docsAgent.cbmPort` (default `9749`).
+Graph extraction depends entirely on codebase-memory-mcp (CBM). On activation, `initGraph` in `extension.ts`:
+1. Checks whether CBM is reachable over HTTP on `docsAgent.cbmPort` (default `9749`).
 2. If CBM is available, creates one `CbmManager` per workspace root and loads graph data through CBM queries.
-3. If CBM is not available, falls back to the external **`graphify`** CLI (installable via `uv tool install graphify` or `pip install graphify`).
-4. In fallback mode, loads `graphify-out/graph.json` if present, runs `graphify` or `graphify update`, and watches the JSON output for later refreshes.
+3. If CBM is not available, the graph stays empty (0 nodes) — there is no local fallback.
 
-`fromCbmQuery` and `fromGraphifyJson` both adapt their source data into the in-memory `CodeGraph`. Relation types handled include calls, implements, injects, and SQL table operations.
+`fromCbmQuery` adapts CBM's query results into the in-memory `CodeGraph`. Relation types handled include calls, implements, injects, and SQL table operations.
 
 ### LLM providers (`src/llm.ts`, `src/ollama.ts`)
 
@@ -80,9 +79,9 @@ C# has no dependency resolution yet. Context is formatted as a multi-section bun
 
 ### Webview panels
 
-**Graph panel** (`src/panel.ts` + `src/webview/graph-panel.ts`): Renders the code graph using Three.js. Messages flow via `postMessage` / `onDidReceiveMessage`. The host sends `subgraph` / `stats` / `searchResults` / `queryAnswer` / `reloading` messages; the webview sends `search` / `expand` / `overview` / `query` / `reload` / `openFile`. CBM mode can provide precomputed 3D positions; graphify fallback uses the local `CodeGraph` view.
+**Graph panel** (`src/panel.ts` + `src/webview/graph-panel.ts`): Renders the code graph using Three.js. Messages flow via `postMessage` / `onDidReceiveMessage`. The host sends `subgraph` / `stats` / `searchResults` / `queryAnswer` / `reloading` messages; the webview sends `search` / `expand` / `overview` / `query` / `reload` / `openFile`. CBM mode provides precomputed 3D positions; without CBM the graph is empty.
 
-**Dashboard panel** (`src/dashboard-panel.ts` + `src/webview/dashboard-panel.ts`): Shows graph stats, communities, recent graphify runs, token usage, search results, and symbol detail. It also exposes a manual graphify refresh action for fallback workflows.
+**Dashboard panel** (`src/dashboard-panel.ts` + `src/webview/dashboard-panel.ts`): Shows graph stats, communities, token usage, search results, and symbol detail.
 
 **Settings panel** (`src/settings-panel.ts` + `src/webview/settings-panel.ts`): Simple form that reads/writes VS Code configuration via `postMessage`.
 
@@ -103,6 +102,6 @@ Markdown files injected as the system prompt when documenting language-specific 
 
 ## Key constraints
 
-- codebase-memory-mcp is the preferred graph backend when reachable. `graphify` remains an external runtime fallback; `promptInstall()` shows a warning with install options, but does not verify success.
+- codebase-memory-mcp is the only graph backend. When it's unreachable, code graph features (graph panel, dashboard stats/communities, impact queries) show 0 nodes/edges instead of falling back to a local parser.
 - The webview CSP allows no inline scripts — only nonce-protected external scripts from `localResourceRoots`. Do not add `'unsafe-inline'` to the policy. Nonces must be generated with `crypto.randomUUID()`, never `Math.random()`.
 - `context.ts` import resolution is hardcoded to `com.example.*` and `src/main/java`. Update both constants if the target Java package changes.
