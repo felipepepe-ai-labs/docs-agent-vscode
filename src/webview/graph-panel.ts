@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { simulateStep, totalEnergy } from './graph-sim';
 
 // ── VS Code webview API ───────────────────────────────────────────────────────
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
@@ -119,23 +120,20 @@ interface NodeObjects {
 interface EdgeObjects {
   line: THREE.Line;
   cone: THREE.Mesh;
+  edge: GraphEdge;
 }
 
 let nodeMeshes = new Map<string, NodeObjects>();
 let edgeMeshes: EdgeObjects[] = [];
 let pickTargets: THREE.Mesh[] = [];   // raycasting candidates
 
-// ── Simulation parameters ─────────────────────────────────────────────────────
-const SIM = {
-  REPEL:    12000,
-  SPRING:   0.022,
-  REST_LEN: 160,
-  DAMPING:  0.76,
-  GRAVITY:  0.006,
-};
-
+// ── Simulation state ──────────────────────────────────────────────────────────
 let simActive = false;
 let stableFor = 0;
+
+// Render-on-demand: the rAF loop only issues a GPU render when something
+// actually changed (simulation tick, camera move, selection, resize, new data).
+let needsRender = true;
 
 // ── Camera orbit ──────────────────────────────────────────────────────────────
 const sph = { theta: 0.4, phi: 1.1, radius: 700 };
@@ -153,6 +151,7 @@ function syncCamera(): void {
     target.z + radius * Math.sin(phi) * Math.cos(theta),
   );
   camera.lookAt(target);
+  needsRender = true;
 }
 syncCamera();
 
@@ -161,14 +160,46 @@ const SPHERE_GEO_LG = new THREE.SphereGeometry(22, 32, 16);  // center node
 const SPHERE_GEO_SM = new THREE.SphereGeometry(15, 28, 14);  // other nodes
 const CONE_GEO      = new THREE.ConeGeometry(3.5, 12, 8);
 
-function makeNodeMat(color: number, isCenter: boolean): THREE.MeshPhongMaterial {
-  return new THREE.MeshPhongMaterial({
-    color,
-    emissive:          new THREE.Color(color),
-    emissiveIntensity: isCenter ? 0.45 : 0.18,
-    shininess:         90,
-    specular:          new THREE.Color(0xffffff),
-  });
+// Shared material caches — bounded by kind × emissive tier and edge color.
+// Cached materials are never disposed; clearScene only releases per-node
+// resources (label textures, ring, line geometries).
+const nodeMatCache = new Map<string, THREE.MeshPhongMaterial>();
+const lineMatCache = new Map<number, THREE.LineBasicMaterial>();
+const coneMatCache = new Map<number, THREE.MeshBasicMaterial>();
+
+function nodeMaterial(kind: string, emissiveIntensity: number): THREE.MeshPhongMaterial {
+  const key = `${kind}:${emissiveIntensity}`;
+  let mat = nodeMatCache.get(key);
+  if (!mat) {
+    const color = KIND_HEX[kind] ?? KIND_HEX.unknown;
+    mat = new THREE.MeshPhongMaterial({
+      color,
+      emissive:          new THREE.Color(color),
+      emissiveIntensity,
+      shininess:         90,
+      specular:          new THREE.Color(0xffffff),
+    });
+    nodeMatCache.set(key, mat);
+  }
+  return mat;
+}
+
+function lineMaterial(color: number): THREE.LineBasicMaterial {
+  let mat = lineMatCache.get(color);
+  if (!mat) {
+    mat = new THREE.LineBasicMaterial({ color, opacity: 0.45, transparent: true });
+    lineMatCache.set(color, mat);
+  }
+  return mat;
+}
+
+function coneMaterial(color: number): THREE.MeshBasicMaterial {
+  let mat = coneMatCache.get(color);
+  if (!mat) {
+    mat = new THREE.MeshBasicMaterial({ color, opacity: 0.65, transparent: true });
+    coneMatCache.set(color, mat);
+  }
+  return mat;
 }
 
 function makeLabelSprite(text: string, isCenter: boolean): THREE.Sprite {
@@ -211,25 +242,27 @@ function makeSelectionRing(radius: number, color: number): THREE.LineLoop {
 
 // ── Scene population ──────────────────────────────────────────────────────────
 function clearScene(): void {
+  // Sphere/cone geometries and kind/color materials are shared caches — only
+  // per-node resources (label textures, rings, line geometries) are disposed.
   for (const { mesh, label, ring } of nodeMeshes.values()) {
-    scene.remove(mesh);   mesh.geometry.dispose();  (mesh.material as THREE.Material).dispose();
+    scene.remove(mesh);
     scene.remove(label);  label.material.map?.dispose();  label.material.dispose();
     if (ring) { scene.remove(ring); ring.geometry.dispose(); (ring.material as THREE.Material).dispose(); }
   }
   for (const { line, cone } of edgeMeshes) {
-    scene.remove(line); line.geometry.dispose(); (line.material as THREE.Material).dispose();
-    scene.remove(cone); cone.geometry.dispose(); (cone.material as THREE.Material).dispose();
+    scene.remove(line); line.geometry.dispose();
+    scene.remove(cone);
   }
   nodeMeshes.clear();
   edgeMeshes = [];
   pickTargets = [];
+  needsRender = true;
 }
 
 function buildNodeMesh(n: SimNode): void {
   const isCenter = n.id === centerId;
-  const color    = KIND_HEX[n.kind] ?? KIND_HEX.unknown;
 
-  const mesh  = new THREE.Mesh(isCenter ? SPHERE_GEO_LG : SPHERE_GEO_SM, makeNodeMat(color, isCenter));
+  const mesh  = new THREE.Mesh(isCenter ? SPHERE_GEO_LG : SPHERE_GEO_SM, nodeMaterial(n.kind, isCenter ? 0.45 : 0.18));
   mesh.position.set(n.x, n.y, n.z);
   mesh.userData = n;
   scene.add(mesh);
@@ -253,8 +286,7 @@ function buildEdgeMesh(e: GraphEdge): void {
 
   // Line
   const pts = [new THREE.Vector3(a.x, a.y, a.z), new THREE.Vector3(b.x, b.y, b.z)];
-  const lineMat = new THREE.LineBasicMaterial({ color, opacity: 0.45, transparent: true });
-  const line    = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineMat);
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineMaterial(color));
   scene.add(line);
 
   // Arrowhead cone
@@ -262,7 +294,7 @@ function buildEdgeMesh(e: GraphEdge): void {
   const len  = dir.length();
   dir.normalize();
 
-  const cone    = new THREE.Mesh(CONE_GEO, new THREE.MeshBasicMaterial({ color, opacity: 0.65, transparent: true }));
+  const cone    = new THREE.Mesh(CONE_GEO, coneMaterial(color));
   const conePos = new THREE.Vector3(a.x, a.y, a.z).addScaledVector(dir, len * 0.72);
   cone.position.copy(conePos);
 
@@ -273,45 +305,15 @@ function buildEdgeMesh(e: GraphEdge): void {
   }
   scene.add(cone);
 
-  edgeMeshes.push({ line, cone });
+  edgeMeshes.push({ line, cone, edge: e });
 }
 
-// ── Simulation step ───────────────────────────────────────────────────────────
-function simulateStep(): void {
-  const { REPEL, SPRING, REST_LEN, DAMPING, GRAVITY } = SIM;
-
-  for (let i = 0; i < simNodes.length; i++) {
-    for (let j = i + 1; j < simNodes.length; j++) {
-      const a = simNodes[i], b = simNodes[j];
-      const dx = (b.x - a.x) || 0.01;
-      const dy = (b.y - a.y) || 0.01;
-      const dz = (b.z - a.z) || 0.01;
-      const d2 = dx * dx + dy * dy + dz * dz;
-      const d  = Math.sqrt(d2);
-      const f  = REPEL / d2;
-      const fx = f * dx / d, fy = f * dy / d, fz = f * dz / d;
-      a.vx -= fx; a.vy -= fy; a.vz -= fz;
-      b.vx += fx; b.vy += fy; b.vz += fz;
-    }
-  }
-
-  for (const e of edges) {
-    const a = nodeMap.get(e.source), b = nodeMap.get(e.target);
-    if (!a || !b) continue;
-    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
-    const d  = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-    const f  = SPRING * (d - REST_LEN);
-    const fx = f * dx / d, fy = f * dy / d, fz = f * dz / d;
-    a.vx += fx; a.vy += fy; a.vz += fz;
-    b.vx -= fx; b.vy -= fy; b.vz -= fz;
-  }
-
-  for (const n of simNodes) {
-    n.vx -= n.x * GRAVITY; n.vy -= n.y * GRAVITY; n.vz -= n.z * GRAVITY;
-    n.vx *= DAMPING; n.vy *= DAMPING; n.vz *= DAMPING;
-    n.x  += n.vx;    n.y  += n.vy;    n.z  += n.vz;
-  }
-}
+// ── Mesh position sync ────────────────────────────────────────────────────────
+// Module-level scratch vectors — syncMeshPositions runs per simulation frame,
+// so per-edge allocations would be pure GC churn.
+const _dir = new THREE.Vector3();
+const _pos = new THREE.Vector3();
+const _X_AXIS = new THREE.Vector3(1, 0, 0);
 
 function syncMeshPositions(): void {
   for (const { mesh, label, data: n } of nodeMeshes.values()) {
@@ -320,11 +322,8 @@ function syncMeshPositions(): void {
     label.position.set(n.x, n.y + (isCenter ? 32 : 24), n.z);
   }
 
-  for (let i = 0; i < edgeMeshes.length; i++) {
-    const { line, cone } = edgeMeshes[i];
-    const e = edges[i];
-    if (!e) continue;
-    const a = nodeMap.get(e.source), b = nodeMap.get(e.target);
+  for (const { line, cone, edge } of edgeMeshes) {
+    const a = nodeMap.get(edge.source), b = nodeMap.get(edge.target);
     if (!a || !b) continue;
 
     const pos = line.geometry.attributes['position'] as THREE.BufferAttribute;
@@ -332,14 +331,14 @@ function syncMeshPositions(): void {
     pos.setXYZ(1, b.x, b.y, b.z);
     pos.needsUpdate = true;
 
-    const dir = new THREE.Vector3(b.x - a.x, b.y - a.y, b.z - a.z);
-    const len = dir.length();
-    dir.normalize();
-    cone.position.copy(new THREE.Vector3(a.x, a.y, a.z).addScaledVector(dir, len * 0.72));
-    if (dir.dot(UP) > -0.9999) {
-      cone.quaternion.setFromUnitVectors(UP, dir);
+    _dir.set(b.x - a.x, b.y - a.y, b.z - a.z);
+    const len = _dir.length();
+    _dir.normalize();
+    cone.position.copy(_pos.set(a.x, a.y, a.z).addScaledVector(_dir, len * 0.72));
+    if (_dir.dot(UP) > -0.9999) {
+      cone.quaternion.setFromUnitVectors(UP, _dir);
     } else {
-      cone.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+      cone.quaternion.setFromAxisAngle(_X_AXIS, Math.PI);
     }
   }
 }
@@ -408,11 +407,12 @@ function setSelected(node: SimNode | null): void {
 
   selected = node;
   showDetail(node);
+  needsRender = true;
 
   if (!node) {
-    // Reset all emissive intensities
-    for (const [id, { mesh }] of nodeMeshes) {
-      (mesh.material as THREE.MeshPhongMaterial).emissiveIntensity = id === centerId ? 0.45 : 0.18;
+    // Reset all nodes to their base materials (shared — swap, never mutate)
+    for (const [id, obj] of nodeMeshes) {
+      obj.mesh.material = nodeMaterial(obj.data.kind, id === centerId ? 0.45 : 0.18);
     }
     return;
   }
@@ -420,7 +420,7 @@ function setSelected(node: SimNode | null): void {
   // Highlight selected
   const obj = nodeMeshes.get(node.id);
   if (!obj) return;
-  (obj.mesh.material as THREE.MeshPhongMaterial).emissiveIntensity = 0.9;
+  obj.mesh.material = nodeMaterial(node.kind, 0.9);
 
   // Add selection ring
   const r     = node.id === centerId ? 22 : 15;
@@ -432,9 +432,9 @@ function setSelected(node: SimNode | null): void {
   obj.ring = ring;
 
   // Dim others
-  for (const [id, { mesh }] of nodeMeshes) {
+  for (const [id, other] of nodeMeshes) {
     if (id !== node.id) {
-      (mesh.material as THREE.MeshPhongMaterial).emissiveIntensity = id === centerId ? 0.3 : 0.08;
+      other.mesh.material = nodeMaterial(other.data.kind, id === centerId ? 0.3 : 0.08);
     }
   }
 }
@@ -494,27 +494,25 @@ function animate(): void {
   requestAnimationFrame(animate);
 
   if (simActive) {
-    simulateStep();
+    simulateStep(simNodes, edges, nodeMap);
     syncMeshPositions();
 
-    // Keep selection ring billboard-aligned during simulation
-    if (selected) {
-      const obj = nodeMeshes.get(selected.id);
-      if (obj?.ring) { obj.ring.position.copy(obj.mesh.position); obj.ring.lookAt(camera.position); }
-    }
-
-    const energy = simNodes.reduce((s, n) => s + n.vx * n.vx + n.vy * n.vy + n.vz * n.vz, 0);
-    if (energy < 0.06) { stableFor++; if (stableFor > 50) simActive = false; }
+    if (totalEnergy(simNodes) < 0.06) { stableFor++; if (stableFor > 50) simActive = false; }
     else stableFor = 0;
-  } else {
-    // Keep selection ring facing camera while idle too
-    if (selected) {
-      const obj = nodeMeshes.get(selected.id);
-      if (obj?.ring) obj.ring.lookAt(camera.position);
-    }
+    needsRender = true;
+  }
+
+  // Render-on-demand: skip the GPU entirely while nothing has changed.
+  if (!needsRender) return;
+
+  // Keep the selection ring billboard-aligned to the pose being rendered
+  if (selected) {
+    const obj = nodeMeshes.get(selected.id);
+    if (obj?.ring) { obj.ring.position.copy(obj.mesh.position); obj.ring.lookAt(camera.position); }
   }
 
   renderer.render(scene, camera);
+  needsRender = false;
 }
 
 // ── Resize ────────────────────────────────────────────────────────────────────
@@ -525,6 +523,7 @@ function resize(): void {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
+  needsRender = true;
 }
 
 new ResizeObserver(resize).observe(graphDiv);
