@@ -18,6 +18,10 @@ export const workspace = {
         const fullKey = section ? `${section}.${key}` : key;
         return configStore.has(fullKey) ? (configStore.get(fullKey) as T) : defaultValue;
       },
+      inspect<T>(key: string): { globalValue: T | undefined } {
+        const fullKey = section ? `${section}.${key}` : key;
+        return { globalValue: configStore.has(fullKey) ? (configStore.get(fullKey) as T) : undefined };
+      },
     };
   },
 };

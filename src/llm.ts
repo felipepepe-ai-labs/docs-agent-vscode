@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { chat as ollamaChat } from './ollama';
+import { chat as ollamaChat, getAllowPrivateNetwork } from './ollama';
 import { recordTokenUsage } from './token-store';
 
 export type Provider = 'ollama' | 'vscode-lm';
@@ -47,7 +47,7 @@ export async function chat(
 
   const result = await ollamaChat(
     messages.map(m => ({ role: m.role, content: m.content })),
-    { url: config.ollamaUrl, model: config.ollamaModel },
+    { url: config.ollamaUrl, model: config.ollamaModel, allowPrivateNetwork: getAllowPrivateNetwork() },
   );
   recordTokenUsage({
     timestamp: Date.now(), provider: 'ollama', model: config.ollamaModel,

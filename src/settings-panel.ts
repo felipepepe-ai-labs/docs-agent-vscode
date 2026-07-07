@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { assertSafeUrl } from './ollama';
+import { assertSafeUrl, getAllowPrivateNetwork } from './ollama';
 
 interface OllamaModel { name: string }
 
@@ -81,7 +81,7 @@ export class SettingsPanel {
 
   private async testOllama(url: string): Promise<void> {
     try {
-      assertSafeUrl(url);
+      assertSafeUrl(url, getAllowPrivateNetwork());
       const resp = await fetch(`${url}/api/version`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json() as { version?: string };
@@ -93,7 +93,7 @@ export class SettingsPanel {
 
   private async fetchOllamaModels(url: string): Promise<void> {
     try {
-      assertSafeUrl(url);
+      assertSafeUrl(url, getAllowPrivateNetwork());
       const resp = await fetch(`${url}/api/tags`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json() as { models?: OllamaModel[] };

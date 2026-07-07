@@ -49,6 +49,7 @@ Every piece of documentation Docs Agent generates must be grounded in the actual
 |---|---|---|
 | `docsAgent.provider` | `ollama` | LLM provider: `ollama` or `vscode-lm` |
 | `docsAgent.ollamaUrl` | `http://localhost:11434` | Ollama base URL |
+| `docsAgent.allowPrivateNetworkOllama` | `false` | Allow `ollamaUrl` to target a private-network address (LAN Ollama). User settings only — a workspace cannot enable this on your behalf |
 | `docsAgent.model` | `qwen3:35b` | Ollama model name |
 | `docsAgent.vscodeLmFamily` | *(empty)* | VS Code LM model family, e.g. `gpt-4o`. Empty = first available |
 | `docsAgent.cbmPort` | `9749` | Port for a running codebase-memory-mcp HTTP server |

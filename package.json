@@ -61,6 +61,12 @@
           "default": "http://localhost:11434",
           "description": "Base URL of the local Ollama instance (used when provider is 'ollama')"
         },
+        "docsAgent.allowPrivateNetworkOllama": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "description": "Allow docsAgent.ollamaUrl to target a private-network address (e.g. Ollama running on another machine on your LAN, like 192.168.x.x or 10.x.x.x). Off by default to stop a workspace's committed settings from silently redirecting requests into your internal network. This setting only takes effect from your User settings — a workspace cannot enable it on your behalf."
+        },
         "docsAgent.model": {
           "type": "string",
           "default": "qwen3:35b",
