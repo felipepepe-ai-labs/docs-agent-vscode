@@ -8,6 +8,18 @@ export interface OllamaMessage {
 export interface OllamaConfig {
   url: string;
   model: string;
+  allowPrivateNetwork: boolean;
+}
+
+// Read from *global* scope only (never workspace/workspaceFolder). A malicious
+// repo can ship a `.vscode/settings.json` that silently repoints `ollamaUrl`
+// at an internal service — if this toggle honored workspace scope too, that
+// same file could flip it on and defeat the RFC 1918 guard below. Reading
+// only the user's own global setting means opting in requires an action the
+// project being opened cannot take on the user's behalf.
+export function getAllowPrivateNetwork(): boolean {
+  const cfg = workspace.getConfiguration('docsAgent');
+  return cfg.inspect<boolean>('allowPrivateNetworkOllama')?.globalValue ?? false;
 }
 
 export function getOllamaConfig(): OllamaConfig {
@@ -15,6 +27,7 @@ export function getOllamaConfig(): OllamaConfig {
   return {
     url: cfg.get<string>('ollamaUrl', 'http://localhost:11434'),
     model: cfg.get<string>('model', 'qwen3:35b'),
+    allowPrivateNetwork: getAllowPrivateNetwork(),
   };
 }
 
@@ -30,7 +43,28 @@ function resolveIpv4Mapped(hostname: string): string {
   return hostname;
 }
 
-export function assertSafeUrl(url: string): void {
+// Never a legitimate manually-configured Ollama target: link-local/cloud-metadata,
+// CGNAT, and "this network" addresses. Blocked regardless of `allowPrivateNetwork`.
+const ALWAYS_BLOCKED = [
+  /^169\.254\./,                    // link-local / AWS metadata
+  /^100\.64\./,                     // CGNAT
+  /^0\./,                           // "this" network
+];
+
+// RFC 1918 private ranges — a completely normal home/office LAN setup (e.g.
+// Ollama running on another machine on the same network). Only blocked by
+// default to stop a malicious repo's workspace settings from silently
+// redirecting requests into the user's internal network (see
+// getAllowPrivateNetwork). Gated behind `allowPrivateNetwork`.
+const PRIVATE_NETWORK_BLOCKED = [
+  /^10\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+  /^192\.168\./,
+];
+
+const BLOCKED_EXACT = new Set(['fd00:ec2::254', '::1', 'fe80::1']);
+
+export function assertSafeUrl(url: string, allowPrivateNetwork = false): void {
   let parsed: URL;
   try { parsed = new URL(url); } catch { throw new Error(`Invalid Ollama URL: ${url}`); }
   if (!['http:', 'https:'].includes(parsed.protocol)) {
@@ -38,17 +72,11 @@ export function assertSafeUrl(url: string): void {
   }
   const hostname = resolveIpv4Mapped(parsed.hostname.toLowerCase().replace(/^\[|\]$/g, ''));
 
-  const BLOCKED = [
-    /^169\.254\./,                    // link-local / AWS metadata
-    /^10\./,                          // RFC 1918
-    /^172\.(1[6-9]|2\d|3[01])\./,    // RFC 1918
-    /^192\.168\./,                    // RFC 1918
-    /^100\.64\./,                     // CGNAT
-    /^0\./,                           // "this" network
-  ];
-  const BLOCKED_EXACT = new Set(['fd00:ec2::254', '::1', 'fe80::1']);
+  const blocked = ALWAYS_BLOCKED.some(r => r.test(hostname))
+    || BLOCKED_EXACT.has(hostname)
+    || (!allowPrivateNetwork && PRIVATE_NETWORK_BLOCKED.some(r => r.test(hostname)));
 
-  if (BLOCKED.some(r => r.test(hostname)) || BLOCKED_EXACT.has(hostname)) {
+  if (blocked) {
     throw new Error(`Ollama URL targets a restricted network address: ${hostname}`);
   }
 }
@@ -60,7 +88,7 @@ export interface OllamaResult {
 }
 
 export async function chat(messages: OllamaMessage[], config: OllamaConfig): Promise<OllamaResult> {
-  assertSafeUrl(config.url);
+  assertSafeUrl(config.url, config.allowPrivateNetwork);
 
   let response: Response;
 

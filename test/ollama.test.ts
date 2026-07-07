@@ -1,5 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { assertSafeUrl, chat } from '../src/ollama';
+import { assertSafeUrl, chat, getAllowPrivateNetwork } from '../src/ollama';
+import { __resetConfig, __setConfig } from './mocks/vscode';
+
+describe('getAllowPrivateNetwork', () => {
+  afterEach(() => __resetConfig());
+
+  it('defaults to false when unset', () => {
+    expect(getAllowPrivateNetwork()).toBe(false);
+  });
+
+  it('reads the configured value', () => {
+    __setConfig('docsAgent.allowPrivateNetworkOllama', true);
+    expect(getAllowPrivateNetwork()).toBe(true);
+  });
+});
 
 describe('assertSafeUrl — SSRF guard', () => {
   it('allows localhost and public hosts over http/https', () => {
@@ -38,6 +52,18 @@ describe('assertSafeUrl — SSRF guard', () => {
   it('rejects IPv6 loopback and metadata hosts', () => {
     expect(() => assertSafeUrl('http://[::1]:11434')).toThrow(/restricted/);
     expect(() => assertSafeUrl('http://[fd00:ec2::254]')).toThrow(/restricted/);
+  });
+
+  it('allows RFC 1918 ranges when allowPrivateNetwork is set', () => {
+    for (const host of ['http://10.0.0.5:11434', 'http://172.16.3.4', 'http://192.168.1.60:11434']) {
+      expect(() => assertSafeUrl(host, true), host).not.toThrow();
+    }
+  });
+
+  it('still rejects link-local, metadata, and CGNAT even with allowPrivateNetwork', () => {
+    for (const host of ['http://169.254.169.254/latest/meta-data', 'http://100.64.0.1', 'http://[fd00:ec2::254]']) {
+      expect(() => assertSafeUrl(host, true), host).toThrow(/restricted network address/);
+    }
   });
 });
 
