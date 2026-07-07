@@ -6,6 +6,11 @@ node_modules/**
 tsconfig.json
 .gitignore
 .claude/
+.github/
+.vscode/
+.atl/
+.codegraph/
+.copilot-chat/
 pnpm-lock.yaml
 pnpm-workspace.yaml
 CLAUDE.md
