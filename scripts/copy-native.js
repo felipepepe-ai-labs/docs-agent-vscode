@@ -43,11 +43,3 @@ fs.writeFileSync(path.join(mcpBindingsDst, 'bindings.js'), [
   "};",
 ].join('\n'));
 console.log('better-sqlite3 + bindings shim written to mcp-server/dist/node_modules');
-
-// Bump patch version in package.json
-const pkgPath = path.resolve(root, 'package.json');
-const pkg     = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-const [major, minor, patch] = pkg.version.split('.').map(Number);
-pkg.version = `${major}.${minor}.${patch + 1}`;
-fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
-console.log(`version bumped to ${pkg.version}`);
