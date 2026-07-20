@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import type { CbmManager } from './cbm-runner';
+import { fromCbmRelativePath, toCbmRelativePath, type CbmManager } from './cbm-runner';
 import { CBM_CALLER_LABELS } from './graph';
 
 export interface FileContext {
@@ -92,8 +92,13 @@ export async function buildContextWithCbm(
 ): Promise<FileContext> {
   const base = buildContext(activeFilePath, workspaceRoot);
 
+  // CBM's file_path is relative to workspaceRoot (e.g. "src/context.ts"), never
+  // the absolute paths used everywhere else in this extension — every query and
+  // result below converts through toCbmRelativePath/fromCbmRelativePath.
+  const relActivePath = toCbmRelativePath(activeFilePath, workspaceRoot);
+  const safePath = relActivePath.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
   // Cypher: find symbols in other files that callers in activeFilePath call
-  const safePath = activeFilePath.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   let depQns: { qn: string; file: string }[] = [];
   try {
     const { rows } = await cbm.queryGraph(
@@ -111,9 +116,38 @@ export async function buildContextWithCbm(
   ]);
   const extraDeps: { filePath: string; content: string }[] = [];
 
-  for (const { qn, file } of depQns) {
-    if (!file || !qn || seen.has(file)) continue;
+  for (const { qn, file: relFile } of depQns) {
+    if (!relFile || !qn) continue;
+    const file = fromCbmRelativePath(relFile, workspaceRoot);
+    if (seen.has(file)) continue;
     // Strict workspace containment — never fetch files outside the root
+    if (!file.startsWith(workspaceRoot + path.sep) && file !== workspaceRoot) continue;
+    try {
+      const snippet = await cbm.getCodeSnippet(qn);
+      if (snippet) {
+        extraDeps.push({ filePath: file, content: snippet });
+        seen.add(file);
+      }
+    } catch { /* symbol not indexed or ambiguous — skip */ }
+  }
+
+  // IMPLEMENTS: language-agnostic replacement for the Java-only `*Impl` filename
+  // heuristic in resolveDependencies() — CALLS alone never surfaces an
+  // interface/implementation pair since implementing an interface isn't a call.
+  let implRows: { a_qn: string; a_file: string; b_qn: string; b_file: string }[] = [];
+  try {
+    const { rows } = await cbm.queryGraph(
+      `MATCH (a)-[:IMPLEMENTS]->(b) WHERE a.file_path = '${safePath}' OR b.file_path = '${safePath}' ` +
+      'RETURN a.qualified_name AS a_qn, a.file_path AS a_file, b.qualified_name AS b_qn, b.file_path AS b_file LIMIT 15',
+    );
+    implRows = rows as { a_qn: string; a_file: string; b_qn: string; b_file: string }[];
+  } catch { /* IMPLEMENTS not available — skip */ }
+
+  for (const row of implRows) {
+    const [qn, relFile] = row.a_file === relActivePath ? [row.b_qn, row.b_file] : [row.a_qn, row.a_file];
+    if (!relFile || !qn) continue;
+    const file = fromCbmRelativePath(relFile, workspaceRoot);
+    if (seen.has(file)) continue;
     if (!file.startsWith(workspaceRoot + path.sep) && file !== workspaceRoot) continue;
     try {
       const snippet = await cbm.getCodeSnippet(qn);
