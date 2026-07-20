@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { renderMarkdown, validateAndParse } from '../src/schema';
+import { renderMarkdown, validateAndParse, verifyCitationsAgainstGraph } from '../src/schema';
+import type { CbmManager, CbmQueryResult } from '../src/cbm-runner';
 
 const CTX = new Set(['src/main/java/com/example/OrderService.java']);
+
+function stubCbm(onQuery?: (cypher: string) => Promise<CbmQueryResult>): CbmManager {
+  return {
+    repoPath:   '/ws',
+    queryGraph: onQuery ?? (async () => ({ rows: [], total: 0 })),
+  } as unknown as CbmManager;
+}
 
 function entry(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -78,6 +86,59 @@ describe('validateAndParse — anti-hallucination contract', () => {
     const result = validateAndParse(JSON.stringify(['just a string', null, 7]), CTX);
     expect(result.valid).toHaveLength(0);
     expect(result.rejected).toHaveLength(3);
+  });
+});
+
+describe('verifyCitationsAgainstGraph — second-layer graph check', () => {
+  // Entry "file" values are absolute (as they are in production, built from
+  // ctx.primary.filePath); CBM's file_path is relative to repoPath ('/ws' here).
+  const ABS_FILE = '/ws/src/main/java/com/example/OrderService.java';
+  const REL_FILE = 'src/main/java/com/example/OrderService.java';
+  const ABS_CTX = new Set([ABS_FILE]);
+
+  it('rejects an entry whose cited line has no nearby node in the CBM index', async () => {
+    const base = validateAndParse(JSON.stringify([entry({ file: ABS_FILE, line: 42 })]), ABS_CTX);
+    const cbm = stubCbm(async () => ({
+      rows: [{ file: REL_FILE, line: 900 }],
+      total: 1,
+    }));
+    const result = await verifyCitationsAgainstGraph(base, cbm);
+    expect(result.valid).toHaveLength(0);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0].reason).toContain('No indexed symbol near');
+  });
+
+  it('keeps an entry within the line tolerance of an indexed node', async () => {
+    const base = validateAndParse(JSON.stringify([entry({ file: ABS_FILE, line: 42 })]), ABS_CTX);
+    const cbm = stubCbm(async () => ({
+      rows: [{ file: REL_FILE, line: 43 }],
+      total: 1,
+    }));
+    const result = await verifyCitationsAgainstGraph(base, cbm);
+    expect(result.valid).toHaveLength(1);
+    expect(result.rejected).toHaveLength(0);
+  });
+
+  it('does not punish entries in a file the graph has zero coverage for', async () => {
+    const base = validateAndParse(JSON.stringify([entry({ file: ABS_FILE, line: 42 })]), ABS_CTX);
+    const cbm = stubCbm(async () => ({ rows: [], total: 0 }));
+    const result = await verifyCitationsAgainstGraph(base, cbm);
+    expect(result.valid).toHaveLength(1);
+    expect(result.rejected).toHaveLength(0);
+  });
+
+  it('degrades to the base result when the graph query throws', async () => {
+    const base = validateAndParse(JSON.stringify([entry({ file: ABS_FILE, line: 42 })]), ABS_CTX);
+    const cbm = stubCbm(async () => { throw new Error('CBM unreachable'); });
+    const result = await verifyCitationsAgainstGraph(base, cbm);
+    expect(result).toBe(base);
+  });
+
+  it('returns the result unchanged when there are no valid entries to check', async () => {
+    const base = validateAndParse('not json', CTX);
+    const cbm = stubCbm(async () => { throw new Error('should not be called'); });
+    const result = await verifyCitationsAgainstGraph(base, cbm);
+    expect(result).toBe(base);
   });
 });
 

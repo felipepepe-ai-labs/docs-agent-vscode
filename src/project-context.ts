@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { fromCbmRelativePath, type CbmManager } from './cbm-runner';
 
 export interface FileSnippet { path: string; content: string }
 
@@ -13,15 +14,42 @@ export interface ProjectContext {
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────
-export function buildProjectContext(root: string): ProjectContext {
+export async function buildProjectContext(root: string, cbm?: CbmManager): Promise<ProjectContext> {
   const manifest     = readManifest(root);
   const type         = detectType(root, manifest);
   const name         = detectName(root, manifest);
   const structure    = buildTree(root, 0, 3);
   const existingDocs = readExistingDocs(root);
-  const sourceFiles  = sampleSourceFiles(root, type, 60_000);
+  const fileDegrees  = cbm ? await computeFileDegrees(cbm, root) : new Map<string, number>();
+  const sourceFiles  = sampleSourceFiles(root, type, 60_000, fileDegrees);
 
   return { name, type, structure, manifest, existingDocs, sourceFiles };
+}
+
+// Ranks files by call-graph degree (fan-in + fan-out) so file selection reflects
+// actual code structure instead of only filename conventions. Falls back to an
+// empty map (pure regex ranking) when CBM is unavailable or the query fails.
+async function computeFileDegrees(cbm: CbmManager, root: string): Promise<Map<string, number>> {
+  const degrees = new Map<string, number>();
+  try {
+    const { rows } = await cbm.queryGraph(
+      'MATCH (a)-[:CALLS]->(b) WHERE a.file_path IS NOT NULL AND b.file_path IS NOT NULL ' +
+      'RETURN a.file_path AS caller, b.file_path AS callee LIMIT 5000',
+    );
+    // CBM returns file_path relative to the repo root — convert to the absolute
+    // paths collectFiles()/sampleSourceFiles() work with, or the join is a no-op.
+    for (const row of rows as { caller: string; callee: string }[]) {
+      if (row.caller) {
+        const abs = fromCbmRelativePath(row.caller, root);
+        degrees.set(abs, (degrees.get(abs) ?? 0) + 1);
+      }
+      if (row.callee) {
+        const abs = fromCbmRelativePath(row.callee, root);
+        degrees.set(abs, (degrees.get(abs) ?? 0) + 1);
+      }
+    }
+  } catch { /* CBM not ready — degrees stays empty, sampleSourceFiles falls back to regex-only ranking */ }
+  return degrees;
 }
 
 // ── Project type detection ────────────────────────────────────────────────────
@@ -143,13 +171,18 @@ function scoreFile(filePath: string): number {
   return 1;
 }
 
-function sampleSourceFiles(root: string, _type: string, charBudget: number): FileSnippet[] {
+function sampleSourceFiles(
+  root: string,
+  _type: string,
+  charBudget: number,
+  fileDegrees: Map<string, number> = new Map(),
+): FileSnippet[] {
   const all = collectFiles(root);
   const scored = all
     .filter(f => SOURCE_EXTS.has(path.extname(f).toLowerCase()))
-    .map(f  => ({ path: f, score: scoreFile(f) }))
+    .map(f  => ({ path: f, score: scoreFile(f), degree: fileDegrees.get(f) ?? 0 }))
     .filter(x => x.score >= 0)
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => fileDegrees.size > 0 ? (b.degree - a.degree) || (b.score - a.score) : b.score - a.score);
 
   const result: FileSnippet[] = [];
   let used = 0;

@@ -132,6 +132,20 @@ export class CbmManager {
   dispose(): void {}
 }
 
+// ── Path conventions ─────────────────────────────────────────────────────────
+// CBM indexes and returns file_path as a POSIX-style path relative to the repo
+// root (e.g. "src/context.ts") — never the absolute paths the extension works
+// with elsewhere (document.uri.fsPath). Every Cypher query or result touching
+// file_path must convert through these helpers or it will silently match nothing.
+
+export function toCbmRelativePath(absPath: string, workspaceRoot: string): string {
+  return path.relative(workspaceRoot, absPath).split(path.sep).join('/');
+}
+
+export function fromCbmRelativePath(relPath: string, workspaceRoot: string): string {
+  return path.join(workspaceRoot, ...relPath.split('/'));
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 /** Connect to the already-running CBM HTTP server and return a manager for workspaceRoot. */

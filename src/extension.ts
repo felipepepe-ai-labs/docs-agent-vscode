@@ -11,7 +11,7 @@ import { chat, getLlmConfig, setActiveCommand } from './llm';
 import { GraphPanel } from './panel';
 import { buildProjectContext } from './project-context';
 import { SettingsPanel } from './settings-panel';
-import { OUTPUT_SCHEMA_INSTRUCTION, renderMarkdown, validateAndParse } from './schema';
+import { OUTPUT_SCHEMA_INSTRUCTION, renderMarkdown, validateAndParse, verifyCitationsAgainstGraph } from './schema';
 import { normalizeMermaidBlocks, openDoc, writeDoc } from './writer';
 
 const PRIMERS_DIR = path.join(__dirname, '..', 'src', 'primers');
@@ -125,7 +125,12 @@ ${codeBundle}`;
           );
 
           progress.report({ message: 'Validating citations...' });
-          const result = validateAndParse(raw, contextFiles);
+          let result = validateAndParse(raw, contextFiles);
+          if (cbm) {
+            try {
+              result = await verifyCitationsAgainstGraph(result, cbm);
+            } catch { /* graph verification failed — keep the base validation result */ }
+          }
 
           if (result.valid.length === 0 && result.rejected.length > 0) {
             vscode.window.showErrorMessage(
@@ -248,7 +253,8 @@ function registerDocumentProjectCommand(): vscode.Disposable {
       async (progress, token) => {
         try {
           progress.report({ message: 'Scanning workspace…', increment: 0 });
-          const ctx      = buildProjectContext(root);
+          const cbmForRoot = cbmManagers.get(root);
+          const ctx      = await buildProjectContext(root, cbmForRoot);
           const config   = getLlmConfig();
           const cfg      = vscode.workspace.getConfiguration('docsAgent');
           const docsFolder = cfg.get<string>('docsFolder', 'docs');
@@ -258,7 +264,6 @@ function registerDocumentProjectCommand(): vscode.Disposable {
           // Fetch the full architecture once; each doc type below selects its own
           // relevant slice (+ targeted queries) instead of receiving the same dump.
           let architecture: ArchitectureData = {};
-          const cbmForRoot = cbmManagers.get(root);
           if (cbmForRoot) {
             try {
               progress.report({ message: 'Fetching architecture overview…', increment: 0 });
