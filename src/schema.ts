@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { fromCbmRelativePath, toCbmRelativePath, type CbmManager } from './cbm-runner';
 import type { ImpactSummary } from './graph';
 
 export interface SymbolDoc {
@@ -85,6 +86,58 @@ function validateEntry(entry: unknown, contextFiles: Set<string>): string | null
   if (!['class', 'method', 'field', 'constructor'].includes(e.type as string)) return 'Invalid "type"';
 
   return null;
+}
+
+// Second-layer citation check, additive on top of validateAndParse — never relaxes
+// the base file:line-citation contract, only tightens it further when CBM is available.
+// A cited "file" can pass validateAndParse (it matches a // FILE: header) while "line"
+// is still fabricated; this cross-checks line against codebase-memory-mcp's own index.
+export async function verifyCitationsAgainstGraph(result: DocResult, cbm: CbmManager): Promise<DocResult> {
+  if (result.valid.length === 0) return result;
+
+  // Cited "file" values are absolute (they came from // FILE: headers built off
+  // ctx.primary.filePath / dep.filePath); CBM indexes file_path relative to the
+  // repo root, so every entry is converted before querying and results are
+  // converted back before being matched against entry.file.
+  const files = [...new Set(result.valid.map(s => s.file))];
+  const relToAbs = new Map(files.map(f => [toCbmRelativePath(f, cbm.repoPath), f]));
+  const indexedLines = new Map<string, Set<number>>();
+  try {
+    const filesLiteral = [...relToAbs.keys()]
+      .map(f => `'${f.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`)
+      .join(', ');
+    const { rows } = await cbm.queryGraph(
+      `MATCH (n) WHERE n.file_path IN [${filesLiteral}] AND n.line IS NOT NULL ` +
+      'RETURN n.file_path AS file, n.line AS line LIMIT 5000',
+    );
+    for (const row of rows as { file: string; line: number }[]) {
+      const absFile = relToAbs.get(row.file) ?? fromCbmRelativePath(row.file, cbm.repoPath);
+      if (!indexedLines.has(absFile)) indexedLines.set(absFile, new Set());
+      indexedLines.get(absFile)!.add(row.line);
+    }
+  } catch {
+    return result; // CBM query failed — keep the base validation result as-is
+  }
+
+  const TOLERANCE = 2; // model-reported declaration line vs graph-indexed line can drift slightly
+  const valid: SymbolDoc[] = [];
+  const rejected = [...result.rejected];
+
+  for (const entry of result.valid) {
+    const lines = indexedLines.get(entry.file);
+    const nearMatch = lines && [...lines].some(l => Math.abs(l - entry.line) <= TOLERANCE);
+    if (lines && lines.size > 0 && !nearMatch) {
+      rejected.push({
+        raw: entry,
+        reason: `No indexed symbol near ${entry.file}:${entry.line} in codebase-memory-mcp graph`,
+      });
+    } else {
+      // No graph coverage for this file at all — don't punish entries CBM doesn't index.
+      valid.push(entry);
+    }
+  }
+
+  return { valid, rejected };
 }
 
 export type ImpactLookup = (symbol: string) => ImpactSummary | null;

@@ -11,13 +11,41 @@ import { chat, getLlmConfig, setActiveCommand } from './llm';
 import { GraphPanel } from './panel';
 import { buildProjectContext } from './project-context';
 import { SettingsPanel } from './settings-panel';
-import { OUTPUT_SCHEMA_INSTRUCTION, renderMarkdown, validateAndParse } from './schema';
+import { OUTPUT_SCHEMA_INSTRUCTION, renderMarkdown, validateAndParse, verifyCitationsAgainstGraph } from './schema';
 import { normalizeMermaidBlocks, openDoc, writeDoc } from './writer';
 
 const PRIMERS_DIR = path.join(__dirname, '..', 'src', 'primers');
 let codeGraph: CodeGraph | null = null;
 // One CbmManager per workspace root. Empty when CBM is not installed — graph stays empty.
 const cbmManagers = new Map<string, CbmManager>();
+let cbmStatusBarItem: vscode.StatusBarItem | undefined;
+
+// Reflects whether Docs Agent is actually getting graph-enriched context, not just
+// whether the CBM server process is reachable — isCbmAlive() only checks the latter.
+function updateCbmStatusBar(state: 'offline' | 'reachable', unindexedRoots: string[]): void {
+  if (!cbmStatusBarItem) return;
+
+  if (state === 'offline') {
+    cbmStatusBarItem.text = '$(circle-slash) Docs Agent: CBM offline';
+    cbmStatusBarItem.tooltip =
+      'codebase-memory-mcp is not reachable. Docs Agent is using filesystem-only context — ' +
+      'no call-graph enrichment, IMPLEMENTS resolution, or graph-verified citations.';
+    cbmStatusBarItem.show();
+    return;
+  }
+
+  if (unindexedRoots.length > 0) {
+    const names = unindexedRoots.map(r => path.basename(r)).join(', ');
+    cbmStatusBarItem.text = '$(warning) Docs Agent: CBM not indexed';
+    cbmStatusBarItem.tooltip =
+      `codebase-memory-mcp is running but has not finished indexing: ${names}. ` +
+      'Docs Agent is using filesystem-only context for these until indexing completes.';
+    cbmStatusBarItem.show();
+    return;
+  }
+
+  cbmStatusBarItem.hide();
+}
 
 function languageInstruction(language: string): string {
   if (language === 'spanish') {
@@ -52,6 +80,10 @@ function loadPrimerFile(name: string): string {
 export function activate(context: vscode.ExtensionContext) {
   const folders = vscode.workspace.workspaceFolders ?? [];
   const roots   = folders.map(f => f.uri.fsPath);
+
+  cbmStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  cbmStatusBarItem.command = 'docsAgent.showDashboard';
+  context.subscriptions.push(cbmStatusBarItem);
 
   if (roots.length > 0) {
     void initGraph(context, roots);
@@ -125,7 +157,12 @@ ${codeBundle}`;
           );
 
           progress.report({ message: 'Validating citations...' });
-          const result = validateAndParse(raw, contextFiles);
+          let result = validateAndParse(raw, contextFiles);
+          if (cbm) {
+            try {
+              result = await verifyCitationsAgainstGraph(result, cbm);
+            } catch { /* graph verification failed — keep the base validation result */ }
+          }
 
           if (result.valid.length === 0 && result.rejected.length > 0) {
             vscode.window.showErrorMessage(
@@ -248,7 +285,8 @@ function registerDocumentProjectCommand(): vscode.Disposable {
       async (progress, token) => {
         try {
           progress.report({ message: 'Scanning workspace…', increment: 0 });
-          const ctx      = buildProjectContext(root);
+          const cbmForRoot = cbmManagers.get(root);
+          const ctx      = await buildProjectContext(root, cbmForRoot);
           const config   = getLlmConfig();
           const cfg      = vscode.workspace.getConfiguration('docsAgent');
           const docsFolder = cfg.get<string>('docsFolder', 'docs');
@@ -258,7 +296,6 @@ function registerDocumentProjectCommand(): vscode.Disposable {
           // Fetch the full architecture once; each doc type below selects its own
           // relevant slice (+ targeted queries) instead of receiving the same dump.
           let architecture: ArchitectureData = {};
-          const cbmForRoot = cbmManagers.get(root);
           if (cbmForRoot) {
             try {
               progress.report({ message: 'Fetching architecture overview…', increment: 0 });
@@ -408,6 +445,7 @@ async function initGraph(ctx: vscode.ExtensionContext, roots: string[]): Promise
   // No CBM available — graph stays empty. Code graph features will show 0 nodes/edges.
   codeGraph = new CodeGraph();
   console.log('[Docs Agent] Graph: no CBM available — empty graph (0 nodes)');
+  updateCbmStatusBar('offline', []);
 }
 
 async function initCbm(ctx: vscode.ExtensionContext, roots: string[], port: number): Promise<void> {
@@ -418,6 +456,15 @@ async function initCbm(ctx: vscode.ExtensionContext, roots: string[], port: numb
     cbmManagers.set(root, mgr);
     ctx.subscriptions.push({ dispose: () => mgr.dispose() });
   }
+
+  // isCbmAlive only confirms the server process is reachable — it says nothing
+  // about whether *this* project has been indexed, so check each root explicitly.
+  const unindexedRoots = (
+    await Promise.all(
+      [...cbmManagers].map(async ([root, mgr]) => (await mgr.indexStatus()).indexed ? null : root),
+    )
+  ).filter((r): r is string => r !== null);
+  updateCbmStatusBar('reachable', unindexedRoots);
 
   // Load graph in background — CBM indexes automatically, we just query it.
   await vscode.window.withProgress(
